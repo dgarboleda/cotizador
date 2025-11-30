@@ -11,10 +11,32 @@ import os
 import sys
 import subprocess
 import re
+import difflib  # para autocomplete más inteligente
 
 CONFIG_PATH = Path("config_cotizador.json")
 HIST_PATH = Path("historial_cotizaciones.json")
 IGV_RATE = 0.18
+
+
+# ==== HELPERS JSON =====================================================
+def load_json_safe(path: Path, default):
+    """Lee JSON de forma segura, devolviendo default si falla."""
+    try:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+
+def save_json_safe(path: Path, data):
+    """Escribe JSON de forma segura, ignorando errores de IO."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 # ==== PDF ===============================================================
@@ -87,7 +109,7 @@ class CotizadorApp(tk.Tk):
             "password": "",
             "usar_tls": True,
         }
-        # cache clientes
+        # cache clientes (último registro por cliente)
         self.clientes_hist = {}
 
         self._load_config()
@@ -115,25 +137,25 @@ class CotizadorApp(tk.Tk):
 
     # ==== CONFIG FILE ==================================================
     def _load_config(self):
-        if CONFIG_PATH.exists():
-            try:
-                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        data = load_json_safe(CONFIG_PATH, {})
+        if not data:
+            return
 
-                if "empresa" in data:
-                    self.empresa.update(data["empresa"])
+        if "empresa" in data:
+            self.empresa.update(data["empresa"])
 
-                logo = data.get("logo_path")
-                if logo and Path(logo).exists():
-                    self.logo_path = logo
+        logo = data.get("logo_path")
+        if logo and Path(logo).exists():
+            self.logo_path = logo
 
-                self.serie = data.get("serie", self.serie)
-                self.correlativo = int(data.get("correlativo", self.correlativo))
+        self.serie = data.get("serie", self.serie)
+        try:
+            self.correlativo = int(data.get("correlativo", self.correlativo))
+        except ValueError:
+            pass
 
-                if "email_config" in data:
-                    self.email_config.update(data["email_config"])
-            except Exception:
-                pass
+        if "email_config" in data:
+            self.email_config.update(data["email_config"])
 
     def _save_config(self):
         data = {
@@ -143,11 +165,7 @@ class CotizadorApp(tk.Tk):
             "correlativo": self.correlativo,
             "email_config": self.email_config,
         }
-        try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        save_json_safe(CONFIG_PATH, data)
 
     # ==== UI ROOT ======================================================
     def _build_ui(self):
@@ -238,6 +256,9 @@ class CotizadorApp(tk.Tk):
         self.btn_cancel = ttk.Button(frm, text="Cancelar", command=self.cancelar_edicion)
         self.btn_cancel.grid(row=0, column=6, padx=5)
         self.btn_cancel["state"] = "disabled"
+
+        # Enter para agregar ítem rápido
+        self.bind("<Return>", lambda e: self.agregar_item())
 
     # ---- Totales ------------------------------------------------------
     def _build_totals(self):
@@ -478,9 +499,11 @@ class CotizadorApp(tk.Tk):
         self.item_editing = None
 
     def _refresh_totals(self):
-        subtotal = 0.0
-        for i in self.tree.get_children():
-            subtotal += float(self.tree.item(i)["values"][3])
+        items = self.tree.get_children()
+        subtotales = [
+            float(self.tree.item(i)["values"][3]) for i in items
+        ] if items else []
+        subtotal = sum(subtotales)
 
         igv = subtotal * IGV_RATE if self.var_igv_enabled.get() else 0.0
         total = subtotal + igv
@@ -503,38 +526,24 @@ class CotizadorApp(tk.Tk):
             "ruta_pdf": str(ruta_pdf),
             "estado": estado,
         }
-        data = []
-        if HIST_PATH.exists():
-            try:
-                with open(HIST_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = []
+        data = load_json_safe(HIST_PATH, [])
         data.append(registro)
-        try:
-            with open(HIST_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        save_json_safe(HIST_PATH, data)
 
         self._cargar_clientes_frecuentes_en_combo()
 
     def _cargar_clientes_frecuentes_en_combo(self):
         self.clientes_hist = {}
-        if not HIST_PATH.exists():
+        data = load_json_safe(HIST_PATH, [])
+        if not data:
             self.cmb_clientes["values"] = []
             return
-        try:
-            with open(HIST_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = []
 
         for r in data:
             nombre = r.get("cliente", "").strip()
             if not nombre:
                 continue
-            # último registro por cliente
+            # último registro por cliente (sobrescribe)
             self.clientes_hist[nombre.lower()] = r
 
         nombres = sorted({r["cliente"] for r in self.clientes_hist.values()})
@@ -564,13 +573,10 @@ class CotizadorApp(tk.Tk):
             self._hide_suggestions()
             return
 
-        matches = []
-        for reg in self.clientes_hist.values():
-            nombre = reg.get("cliente", "")
-            if texto.lower() in nombre.lower():
-                matches.append(nombre)
-
-        matches = sorted(set(matches))
+        # lista de nombres únicos
+        nombres = [r.get("cliente", "") for r in self.clientes_hist.values()]
+        # similitud tipo Google Docs usando difflib
+        matches = difflib.get_close_matches(texto, nombres, n=8, cutoff=0.2)
 
         if not matches:
             self._hide_suggestions()
@@ -587,7 +593,9 @@ class CotizadorApp(tk.Tk):
         self.lb_suggestions.place(in_=parent, x=x, y=y, width=width)
         self.lb_suggestions.lift()
 
-        if texto.lower() in self.clientes_hist:
+        # Autocomplete duro si hay match exacto
+        lower_names = {r["cliente"].lower(): r for r in self.clientes_hist.values()}
+        if texto.lower() in lower_names:
             self._rellenar_cliente_por_nombre(texto)
 
     def _on_cliente_down(self, event):
@@ -630,15 +638,9 @@ class CotizadorApp(tk.Tk):
 
     # ==== HISTORIAL / EXPORT / ESTADOS =================================
     def abrir_historial(self):
-        if not HIST_PATH.exists():
+        hist_data = load_json_safe(HIST_PATH, [])
+        if not hist_data:
             messagebox.showinfo("Historial", "No hay cotizaciones registradas.")
-            return
-
-        try:
-            with open(HIST_PATH, "r", encoding="utf-8") as f:
-                hist_data = json.load(f)
-        except Exception:
-            messagebox.showerror("Error", "No se pudo leer el historial.")
             return
 
         win = tk.Toplevel(self)
@@ -696,6 +698,12 @@ class CotizadorApp(tk.Tk):
             if not vals:
                 return
             numero = vals[0]
+            estado_actual = vals[4]
+
+            # Evitar no-op
+            if estado_actual == new_state:
+                messagebox.showinfo("Estado", f"La cotización ya está en estado {new_state}.")
+                return
 
             # Confirmación ligera para cambios críticos
             if new_state in ("Aceptada", "Rechazada"):
@@ -719,8 +727,7 @@ class CotizadorApp(tk.Tk):
 
             # Guardar en disco
             try:
-                with open(HIST_PATH, "w", encoding="utf-8") as f:
-                    json.dump(hist_data, f, indent=2, ensure_ascii=False)
+                save_json_safe(HIST_PATH, hist_data)
             except Exception as e:
                 messagebox.showerror("Estado", f"No se pudo actualizar el historial:\n{e}")
                 return
@@ -814,16 +821,7 @@ class CotizadorApp(tk.Tk):
         tree.bind("<Double-1>", on_double_click)
 
     def exportar_historial_excel(self):
-        if not HIST_PATH.exists():
-            messagebox.showinfo("Historial", "No hay cotizaciones para exportar.")
-            return
-        try:
-            with open(HIST_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            messagebox.showerror("Error", "No se pudo leer el historial.")
-            return
-
+        data = load_json_safe(HIST_PATH, [])
         if not data:
             messagebox.showinfo("Historial", "No hay cotizaciones para exportar.")
             return
@@ -860,6 +858,11 @@ class CotizadorApp(tk.Tk):
             if not dest:
                 messagebox.showinfo("Correo", "No se envió correo (sin destinatario).")
                 return
+
+        # Validación simple de email
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", dest):
+            messagebox.showwarning("Correo", "Email inválido.")
+            return
 
         servidor = self.email_config.get("servidor", "")
         usuario = self.email_config.get("usuario", "")
@@ -928,7 +931,7 @@ class CotizadorApp(tk.Tk):
             subprocess.Popen(["xdg-open", str(folder)])
 
     def abrir_carpeta_cotizaciones(self):
-        base_dir = Path(__file__).resolve().parent
+        base_dir = Path(sys.argv[0]).resolve().parent
         cot_dir = base_dir / "Cotizaciones"
 
         if not cot_dir.exists():
@@ -966,8 +969,8 @@ class CotizadorApp(tk.Tk):
             messagebox.showwarning("Error", "Cliente es obligatorio.")
             return None
 
-        # Carpeta Cotizaciones en el mismo directorio que el script
-        base_dir = Path(__file__).resolve().parent
+        # Carpeta Cotizaciones junto al ejecutable / script
+        base_dir = Path(sys.argv[0]).resolve().parent
         cot_dir = base_dir / "Cotizaciones"
         cot_dir.mkdir(exist_ok=True)
 
@@ -1037,7 +1040,11 @@ class CotizadorApp(tk.Tk):
             pdf.ln(row_h)
 
         # Totales alineados al borde derecho de la tabla
-        subtotal = sum(float(self.tree.item(i)["values"][3]) for i in self.tree.get_children())
+        items = self.tree.get_children()
+        subtotales = [
+            float(self.tree.item(i)["values"][3]) for i in items
+        ] if items else []
+        subtotal = sum(subtotales)
         igv = subtotal * IGV_RATE if self.var_igv_enabled.get() else 0.0
         total = subtotal + igv
 
@@ -1079,6 +1086,7 @@ class CotizadorApp(tk.Tk):
             pdf.multi_cell(0, 5, terms)
 
         pdf.output(str(file_path))
+        del pdf  # libera memoria explícitamente
 
         # Devuelvo todo para que el caller decida estado y lo guarde
         return numero, cot_dir, file_path, subtotal, igv, total
