@@ -490,7 +490,7 @@ class CotizadorApp(tk.Tk):
         self.var_total.set(f"S/ {total:,.2f}")
 
     # ==== HISTORIAL / CLIENTES ========================================
-    def _guardar_en_historial(self, numero, ruta_pdf, subtotal, igv, total):
+    def _guardar_en_historial(self, numero, ruta_pdf, subtotal, igv, total, estado):
         registro = {
             "numero": numero,
             "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -501,6 +501,7 @@ class CotizadorApp(tk.Tk):
             "igv": float(f"{igv:.2f}"),
             "total": float(f"{total:.2f}"),
             "ruta_pdf": str(ruta_pdf),
+            "estado": estado,
         }
         data = []
         if HIST_PATH.exists():
@@ -627,7 +628,7 @@ class CotizadorApp(tk.Tk):
     def _hide_suggestions(self, event=None):
         self.lb_suggestions.place_forget()
 
-    # ==== HISTORIAL / EXPORT ==========================================
+    # ==== HISTORIAL / EXPORT / ESTADOS =================================
     def abrir_historial(self):
         if not HIST_PATH.exists():
             messagebox.showinfo("Historial", "No hay cotizaciones registradas.")
@@ -635,17 +636,38 @@ class CotizadorApp(tk.Tk):
 
         try:
             with open(HIST_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                hist_data = json.load(f)
         except Exception:
             messagebox.showerror("Error", "No se pudo leer el historial.")
             return
 
         win = tk.Toplevel(self)
         win.title("Historial de cotizaciones")
-        win.geometry("900x400")
+        win.geometry("950x450")
         win.grab_set()
 
-        cols = ("numero", "fecha", "cliente", "email", "total", "ruta_pdf")
+        # --- Filtros ---
+        top = ttk.Frame(win)
+        top.pack(fill="x", padx=5, pady=5)
+
+        ttk.Label(top, text="Estado:").pack(side="left")
+        var_f_estado = tk.StringVar(value="Todos")
+        cb_estado = ttk.Combobox(
+            top,
+            textvariable=var_f_estado,
+            state="readonly",
+            width=12,
+            values=["Todos", "Generada", "Enviada", "Aceptada", "Rechazada"]
+        )
+        cb_estado.pack(side="left", padx=5)
+
+        ttk.Label(top, text="Buscar (nro / cliente):").pack(side="left", padx=(15, 2))
+        var_f_text = tk.StringVar()
+        ent_buscar = ttk.Entry(top, textvariable=var_f_text, width=30)
+        ent_buscar.pack(side="left")
+
+        # --- Treeview ---
+        cols = ("numero", "fecha", "cliente", "email", "estado", "total", "ruta_pdf")
         tree = ttk.Treeview(win, columns=cols, show="headings")
         for c in cols:
             tree.heading(c, text=c.capitalize())
@@ -653,23 +675,105 @@ class CotizadorApp(tk.Tk):
         tree.column("fecha", width=140)
         tree.column("cliente", width=200)
         tree.column("email", width=200)
+        tree.column("estado", width=90)
         tree.column("total", width=100, anchor="e")
-        tree.column("ruta_pdf", width=200)
+        tree.column("ruta_pdf", width=220)
 
-        tree.pack(fill="both", expand=True)
+        tree.pack(fill="both", expand=True, padx=5, pady=5)
 
-        for r in data:
-            tree.insert(
-                "", "end",
-                values=(
-                    r.get("numero", ""),
-                    r.get("fecha", ""),
-                    r.get("cliente", ""),
-                    r.get("email", ""),
-                    f"S/ {r.get('total', 0):,.2f}",
-                    r.get("ruta_pdf", ""),
+        # --- Acciones sobre estado ---
+        bottom = ttk.Frame(win)
+        bottom.pack(fill="x", padx=5, pady=5)
+
+        def actualizar_estado_seleccion(new_state: str):
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Estado", "Selecciona una cotización.")
+                return
+
+            item_id = sel[0]
+            vals = tree.item(item_id, "values")
+            if not vals:
+                return
+            numero = vals[0]
+
+            # Confirmación ligera para cambios críticos
+            if new_state in ("Aceptada", "Rechazada"):
+                if not messagebox.askyesno(
+                    "Confirmar",
+                    f"¿Marcar la cotización {numero} como {new_state}?"
+                ):
+                    return
+
+            # Actualizar en memoria
+            found = False
+            for r in hist_data:
+                if r.get("numero") == numero:
+                    r["estado"] = new_state
+                    found = True
+                    break
+
+            if not found:
+                messagebox.showerror("Estado", "No se encontró el registro en el historial.")
+                return
+
+            # Guardar en disco
+            try:
+                with open(HIST_PATH, "w", encoding="utf-8") as f:
+                    json.dump(hist_data, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                messagebox.showerror("Estado", f"No se pudo actualizar el historial:\n{e}")
+                return
+
+            # Refrescar vista
+            refrescar_tree()
+
+        ttk.Button(bottom, text="Marcar como Enviada",
+                   command=lambda: actualizar_estado_seleccion("Enviada")
+                   ).pack(side="left")
+        ttk.Button(bottom, text="Marcar como Aceptada",
+                   command=lambda: actualizar_estado_seleccion("Aceptada")
+                   ).pack(side="left", padx=5)
+        ttk.Button(bottom, text="Marcar como Rechazada",
+                   command=lambda: actualizar_estado_seleccion("Rechazada")
+                   ).pack(side="left")
+
+        # --- Función para refrescar según filtros ---
+        def refrescar_tree(*args):
+            tree.delete(*tree.get_children())
+            filtro_estado = var_f_estado.get()
+            filtro_texto = var_f_text.get().strip().lower()
+
+            for r in hist_data:
+                estado = r.get("estado", "Generada")
+                if filtro_estado != "Todos" and estado != filtro_estado:
+                    continue
+
+                numero = r.get("numero", "")
+                cliente = r.get("cliente", "")
+                if filtro_texto:
+                    if filtro_texto not in numero.lower() and filtro_texto not in cliente.lower():
+                        continue
+
+                tree.insert(
+                    "", "end",
+                    values=(
+                        numero,
+                        r.get("fecha", ""),
+                        cliente,
+                        r.get("email", ""),
+                        estado,
+                        f"S/ {r.get('total', 0):,.2f}",
+                        r.get("ruta_pdf", ""),
+                    )
                 )
-            )
+
+        # Enlazar filtros a refresco
+        cb_estado.bind("<<ComboboxSelected>>", refrescar_tree)
+        ent_buscar.bind("<KeyRelease>", refrescar_tree)
+
+        # Primera carga
+        refrescar_tree()
 
         # Doble clic -> abrir PDF asociado
         def on_double_click(event):
@@ -678,10 +782,10 @@ class CotizadorApp(tk.Tk):
                 if not item_id:
                     return
                 vals = tree.item(item_id, "values")
-                if not vals or len(vals) < 6:
+                if not vals or len(vals) < 7:
                     messagebox.showwarning("Archivo", "No se encontró ruta asociada.")
                     return
-                ruta = vals[5]
+                ruta = vals[6]
                 if not ruta:
                     messagebox.showwarning("Archivo", "No hay ruta de archivo registrada.")
                     return
@@ -694,7 +798,6 @@ class CotizadorApp(tk.Tk):
                     )
                     return
 
-                # Intentar abrir el PDF
                 try:
                     self._abrir_pdf(path)
                 except Exception as e:
@@ -734,14 +837,17 @@ class CotizadorApp(tk.Tk):
 
         campos = [
             "numero", "fecha", "cliente", "email",
-            "direccion_cliente", "subtotal", "igv", "total", "ruta_pdf"
+            "direccion_cliente", "subtotal", "igv", "total", "estado", "ruta_pdf"
         ]
         try:
             with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=campos)
                 writer.writeheader()
                 for r in data:
-                    writer.writerow({k: r.get(k, "") for k in campos})
+                    row = {k: r.get(k, "") for k in campos}
+                    if "estado" not in row or not row["estado"]:
+                        row["estado"] = "Generada"
+                    writer.writerow(row)
             messagebox.showinfo("Exportación", f"Historial exportado a:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo exportar:\n{e}")
@@ -974,10 +1080,8 @@ class CotizadorApp(tk.Tk):
 
         pdf.output(str(file_path))
 
-        # Guardar en historial
-        self._guardar_en_historial(numero, str(file_path), subtotal, igv, total)
-
-        return numero, cot_dir, file_path
+        # Devuelvo todo para que el caller decida estado y lo guarde
+        return numero, cot_dir, file_path, subtotal, igv, total
 
     # ==== GENERAR PDF (solo genera / abre) ============================
     def generar_pdf(self):
@@ -985,7 +1089,10 @@ class CotizadorApp(tk.Tk):
         if result is None:
             return
 
-        numero, cot_dir, file_path = result
+        numero, cot_dir, file_path, subtotal, igv, total = result
+
+        # Guardar en historial con estado "Generada"
+        self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Generada")
 
         # Abrir PDF
         try:
@@ -1004,7 +1111,10 @@ class CotizadorApp(tk.Tk):
         if result is None:
             return
 
-        numero, cot_dir, file_path = result
+        numero, cot_dir, file_path, subtotal, igv, total = result
+
+        # Guardar en historial con estado "Enviada"
+        self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Enviada")
 
         # Abrir PDF
         try:
