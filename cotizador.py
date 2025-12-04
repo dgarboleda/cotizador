@@ -251,6 +251,7 @@ class CotizadorApp(tk.Tk):
         self.var_cliente = tk.StringVar()
         self.var_direccion = tk.StringVar()
         self.var_cliente_email = tk.StringVar()
+        self.var_cliente_ruc = tk.StringVar()
         
         # Condiciones de venta (ahora en términos y condiciones)
         self.var_condicion_pago = tk.StringVar(value=self.terminos_predeterminados["condicion_pago"])
@@ -276,6 +277,7 @@ class CotizadorApp(tk.Tk):
         self.placeholder_cliente = "Nombre del cliente"
         self.placeholder_dir_cliente = "Dirección del cliente"
         self.placeholder_email_cliente = "correo@cliente.com"
+        self.placeholder_cliente_ruc = "RUC (11 dígitos)"
         self.placeholder_cant = "Cantidad"
         self.placeholder_precio = "Precio"
         self.placeholder_desc = "Descripción detallada del producto (multilínea)..."
@@ -378,6 +380,11 @@ class CotizadorApp(tk.Tk):
         ttk.Label(frm, text="Email cliente:").grid(row=0, column=2, sticky="w", padx=(20, 0))
         self.ent_email_cliente = ttk.Entry(frm, textvariable=self.var_cliente_email, width=25)
         self.ent_email_cliente.grid(row=0, column=3, sticky="w")
+        
+        ttk.Label(frm, text="RUC:").grid(row=0, column=4, sticky="w", padx=(20, 0))
+        self.ent_cliente_ruc = ttk.Entry(frm, textvariable=self.var_cliente_ruc, width=15)
+        self.ent_cliente_ruc.grid(row=0, column=5, sticky="w")
+        self.ent_cliente_ruc.bind("<FocusOut>", self._validar_ruc_cliente)
 
         # Número de cotización completamente al borde derecho
         self.var_numero_cot = tk.StringVar(value="")
@@ -726,6 +733,7 @@ class CotizadorApp(tk.Tk):
         self._init_entry_placeholder(self.ent_cliente, self.var_cliente, self.placeholder_cliente)
         self._init_entry_placeholder(self.ent_dir_cliente, self.var_direccion, self.placeholder_dir_cliente)
         self._init_entry_placeholder(self.ent_email_cliente, self.var_cliente_email, self.placeholder_email_cliente)
+        self._init_entry_placeholder(self.ent_cliente_ruc, self.var_cliente_ruc, self.placeholder_cliente_ruc)
         self._init_entry_placeholder(self.ent_cant, self.var_cant, self.placeholder_cant)
         self._init_entry_placeholder(self.ent_precio, self.var_precio, self.placeholder_precio)
 
@@ -1448,6 +1456,7 @@ class CotizadorApp(tk.Tk):
         cliente = self._clean_var(self.var_cliente, self.placeholder_cliente)
         email = self._clean_var(self.var_cliente_email, self.placeholder_email_cliente)
         direccion = self._clean_var(self.var_direccion, self.placeholder_dir_cliente)
+        ruc = self._clean_var(self.var_cliente_ruc, self.placeholder_cliente_ruc)
 
         # Recopilar items con sus imágenes
         items = []
@@ -1474,6 +1483,7 @@ class CotizadorApp(tk.Tk):
             "cliente": cliente,
             "email": email,
             "direccion_cliente": direccion,
+            "ruc_cliente": ruc,
             "condicion_pago": self.var_condicion_pago.get(),
             "validez": self.var_validez.get(),
             "items": items,
@@ -1520,12 +1530,81 @@ class CotizadorApp(tk.Tk):
         self.ent_email_cliente.configure(foreground="black")
         self.var_direccion.set(reg.get("direccion_cliente", ""))
         self.ent_dir_cliente.configure(foreground="black")
+        self.var_cliente_ruc.set(reg.get("ruc_cliente", ""))
+        self.ent_cliente_ruc.configure(foreground="black")
 
     def _on_cliente_frecuente_selected(self, event):
         nombre = self.cmb_clientes.get()
         self._rellenar_cliente_por_nombre(nombre)
         # Guardar el cliente seleccionado para proteger contra borrado
         self.cliente_seleccionado = nombre.lower() if nombre else None
+    
+    def _validar_ruc_cliente(self, event=None):
+        """Valida el RUC del cliente cuando pierde el foco y consulta API."""
+        ruc = self.var_cliente_ruc.get().strip()
+        
+        # Si está vacío o es el placeholder, no validar
+        if not ruc or ruc == self.placeholder_cliente_ruc:
+            return
+        
+        # Validar formato y dígito verificador
+        if not validar_ruc_peruano(ruc):
+            self.show_warning(f"⚠️ El RUC '{ruc}' no parece ser válido.\nVerifica que tenga 11 dígitos y sea correcto.")
+            return
+        
+        # Consultar API para obtener datos de la empresa
+        self._consultar_ruc_api(ruc)
+    
+    def _consultar_ruc_api(self, ruc):
+        """Consulta la API de SUNAT para obtener datos del RUC."""
+        import urllib.request
+        import urllib.error
+        import json
+        
+        try:
+            # Mostrar mensaje de consulta
+            self.show_info("Consultando RUC en SUNAT...")
+            self.update()  # Forzar actualización de UI
+            
+            url = f"https://dniruc.apisperu.com/api/v1/ruc/{ruc}?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImRnYXJib2xlZGFAZ21haWwuY29tIn0.rXW9BEWvNp0sStv33XImkUudScHfq63_LxL-Yw8mvG8"
+            
+            # Realizar petición con timeout
+            req = urllib.request.Request(url)
+            req.add_header('User-Agent', 'Mozilla/5.0')
+            
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                # Verificar si la respuesta es exitosa
+                if data.get('success'):
+                    # Extraer datos
+                    razon_social = data.get('razonSocial', '')
+                    direccion = data.get('direccion', '')
+                    
+                    # Rellenar campos si no están ya completados
+                    cliente_actual = self.var_cliente.get().strip()
+                    if not cliente_actual or cliente_actual == self.placeholder_cliente:
+                        self.var_cliente.set(razon_social)
+                        self.ent_cliente.configure(foreground="black")
+                    
+                    direccion_actual = self.var_direccion.get().strip()
+                    if not direccion_actual or direccion_actual == self.placeholder_dir_cliente:
+                        self.var_direccion.set(direccion)
+                        self.ent_dir_cliente.configure(foreground="black")
+                    
+                    self.show_success(f"✅ Datos obtenidos: {razon_social}")
+                else:
+                    self.show_warning(f"⚠️ No se encontraron datos para el RUC {ruc}")
+                    
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self.show_warning(f"⚠️ RUC {ruc} no encontrado en SUNAT")
+            else:
+                self.show_warning(f"⚠️ Error al consultar RUC: HTTP {e.code}")
+        except urllib.error.URLError:
+            self.show_warning("⚠️ Sin conexión a internet. No se pudo consultar el RUC.")
+        except Exception as e:
+            self.show_warning(f"⚠️ Error al consultar RUC: {str(e)[:50]}")
 
     def _editar_cliente_frecuente(self):
         """Abre ventana para editar el cliente frecuente seleccionado."""
@@ -2183,6 +2262,8 @@ class CotizadorApp(tk.Tk):
         self.ent_email_cliente.configure(foreground="black")
         self.var_direccion.set(registro.get("direccion_cliente", ""))
         self.ent_dir_cliente.configure(foreground="black")
+        self.var_cliente_ruc.set(registro.get("ruc_cliente", ""))
+        self.ent_cliente_ruc.configure(foreground="black")
         
         # Cargar condiciones
         self.var_condicion_pago.set(registro.get("condicion_pago", "50% adelanto - 50% contraentrega"))
@@ -2381,6 +2462,8 @@ class CotizadorApp(tk.Tk):
         self.ent_dir_cliente.configure(foreground="grey")
         self.var_cliente_email.set(self.placeholder_email_cliente)
         self.ent_email_cliente.configure(foreground="grey")
+        self.var_cliente_ruc.set(self.placeholder_cliente_ruc)
+        self.ent_cliente_ruc.configure(foreground="grey")
         self.var_condicion_pago.set(self.terminos_predeterminados["condicion_pago"])
         self.var_validez.set(self.terminos_predeterminados["validez"])
 
@@ -2446,6 +2529,10 @@ class CotizadorApp(tk.Tk):
         email_val = self._clean_var(self.var_cliente_email, self.placeholder_email_cliente)
         if email_val:
             pdf.cell(0, 6, f"Email: {email_val}", ln=1)
+        
+        ruc_val = self._clean_var(self.var_cliente_ruc, self.placeholder_cliente_ruc)
+        if ruc_val:
+            pdf.cell(0, 6, f"RUC: {ruc_val}", ln=1)
 
         pdf.ln(8)
 
