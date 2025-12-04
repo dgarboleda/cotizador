@@ -30,6 +30,12 @@ IGV_RATE = 0.18
 # Regex compiladas para mejor performance
 EMAIL_PATTERN = re.compile(r"[^@]+@[^@]+\.[^@]+")
 
+# Constantes de símbolos de moneda (para evitar recrear dict en cada iteración)
+SIMBOLOS_MONEDA = {"SOLES": "S/", "DOLARES": "$", "EUROS": "€"}
+
+# Formatos de fecha para parsing flexible
+FORMATOS_FECHA = ["%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"]
+
 
 # ==== HELPERS GENERALES ===============================================
 def get_base_dir() -> Path:
@@ -93,6 +99,26 @@ def parse_numero_version(numero: str) -> tuple:
         return parts[0], int(parts[1])
     except (IndexError, ValueError):
         return numero, 1
+
+
+def parse_fecha_flexible(fecha_str: str):
+    """
+    Parsea fecha con múltiples formatos sin recrear lista cada vez.
+    Retorna: datetime.date o None
+    Optimización: usa constante FORMATOS_FECHA en lugar de recrear lista
+    """
+    if not fecha_str:
+        return None
+    
+    fecha_base = fecha_str.split()[0]  # Tomar solo la fecha sin hora
+    
+    for fmt in FORMATOS_FECHA:
+        try:
+            return datetime.strptime(fecha_base, fmt).date()
+        except ValueError:
+            continue
+    
+    return None
 
 
 # ==== PDF ==============================================================
@@ -182,6 +208,7 @@ class CotizadorApp(tk.Tk):
         
         # Control de versiones
         self.numero_base_version = None  # Guarda el número base al cargar desde historial
+        self.numero_actual_display = None  # Guarda el número actual para mostrar en etiqueta
 
         # imágenes por ítem
         self.item_images = {}           # {iid: ruta_origen}
@@ -285,9 +312,17 @@ class CotizadorApp(tk.Tk):
         return val
 
     def _actualizar_numero_cot_display(self):
-        """Actualiza el display del número de cotización."""
-        numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
-        self.var_numero_cot.set(numero)
+        """Actualiza el display del número de cotización.
+        
+        Muestra el número actual, ya sea una cotización nueva o una versión.
+        """
+        # Si hay un numero guardado (para versiones), usarlo
+        if hasattr(self, 'numero_actual_display') and self.numero_actual_display:
+            self.var_numero_cot.set(self.numero_actual_display)
+        else:
+            # Si no, mostrar el número normal (serie-correlativo)
+            numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
+            self.var_numero_cot.set(numero)
     
     def _get_cotizaciones_dir(self) -> Path:
         """Obtiene la carpeta de cotizaciones (personalizada o predeterminada)."""
@@ -986,6 +1021,8 @@ class CotizadorApp(tk.Tk):
                 siguiente_version = 2  # Si no hay versiones, esta es la V2
             
             numero = f"{numero_base}-V{siguiente_version}"
+            # Guardar el número actual para mostrar en la etiqueta
+            self.numero_actual_display = numero
             # Limpiar el numero_base_version después de usarlo
             self.numero_base_version = None
         else:
@@ -993,6 +1030,8 @@ class CotizadorApp(tk.Tk):
             numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
             self.correlativo += 1
             self._save_config()
+            # Limpiar el display para que muestre el siguiente número
+            self.numero_actual_display = None
         
         self._actualizar_numero_cot_display()
         return numero
@@ -1193,12 +1232,8 @@ class CotizadorApp(tk.Tk):
     def _get_simbolo_moneda(self):
         """Retorna el símbolo de la moneda configurada (desde cache)."""
         # Recalcular cache solo si cambió la moneda
-        simbolos = {
-            "SOLES": "S/",
-            "DOLARES": "$",
-            "EUROS": "€"
-        }
-        nuevo_simbolo = simbolos.get(self.moneda, "S/")
+        # Usa constante global SIMBOLOS_MONEDA en lugar de recrear dict
+        nuevo_simbolo = SIMBOLOS_MONEDA.get(self.moneda, "S/")
         if nuevo_simbolo != self._simbolo_moneda_cache:
             self._simbolo_moneda_cache = nuevo_simbolo
         return self._simbolo_moneda_cache
@@ -1805,20 +1840,9 @@ class CotizadorApp(tk.Tk):
             fecha_hasta = var_fecha_hasta.get().strip()
             filtrar_por_entrega = var_filtrar_por_entrega.get()
 
-            # Parsear fechas de filtro
-            fecha_desde_obj = None
-            fecha_hasta_obj = None
-            try:
-                if fecha_desde:
-                    fecha_desde_obj = datetime.strptime(fecha_desde, "%Y-%m-%d").date()
-            except ValueError:
-                pass
-            
-            try:
-                if fecha_hasta:
-                    fecha_hasta_obj = datetime.strptime(fecha_hasta, "%Y-%m-%d").date()
-            except ValueError:
-                pass
+            # Parsear fechas de filtro - usar función optimizada
+            fecha_desde_obj = parse_fecha_flexible(fecha_desde) if fecha_desde else None
+            fecha_hasta_obj = parse_fecha_flexible(fecha_hasta) if fecha_hasta else None
 
             for r in hist_data:
                 estado = r.get("estado", "Generada")
@@ -1840,25 +1864,16 @@ class CotizadorApp(tk.Tk):
                         fecha_str = r.get("fecha", "")
                     
                     if fecha_str:
-                        try:
-                            # Intentar parsear la fecha (puede estar en varios formatos)
-                            fecha_obj = None
-                            for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"]:
-                                try:
-                                    fecha_obj = datetime.strptime(fecha_str.split()[0], fmt).date()
-                                    break
-                                except ValueError:
-                                    continue
-                            
-                            if fecha_obj:
-                                if fecha_desde_obj and fecha_obj < fecha_desde_obj:
-                                    continue
-                                if fecha_hasta_obj and fecha_obj > fecha_hasta_obj:
-                                    continue
-                            else:
-                                # Si no se puede parsear, saltar este registro si hay filtros de fecha
+                        # Usar función helper optimizada para parsing
+                        fecha_obj = parse_fecha_flexible(fecha_str)
+                        
+                        if fecha_obj:
+                            if fecha_desde_obj and fecha_obj < fecha_desde_obj:
                                 continue
-                        except Exception:
+                            if fecha_hasta_obj and fecha_obj > fecha_hasta_obj:
+                                continue
+                        else:
+                            # Si no se puede parsear, saltar este registro
                             continue
                     else:
                         # Si no tiene fecha y hay filtros activos, saltar
@@ -1867,8 +1882,8 @@ class CotizadorApp(tk.Tk):
 
                 # Obtener símbolo de moneda para mostrar el total
                 moneda_registro = r.get("moneda", "SOLES")
-                simbolos = {"SOLES": "S/", "DOLARES": "$", "EUROS": "€"}
-                simbolo = simbolos.get(moneda_registro, "S/")
+                # Usa constante global en lugar de recrear dict en cada iteración
+                simbolo = SIMBOLOS_MONEDA.get(moneda_registro, "S/")
 
                 tree.insert(
                     "", "end",
@@ -1933,6 +1948,17 @@ class CotizadorApp(tk.Tk):
         else:
             # Primera versión, usar el número completo como base
             self.numero_base_version = numero_completo
+        
+        # Extraer serie y correlativo del número base para mostrar en etiqueta
+        numero_base = self.numero_base_version
+        try:
+            # Formato: COT-YYYY-NNNNN
+            parts = numero_base.split("-")
+            if len(parts) >= 3:
+                self.serie = "-".join(parts[:-1])  # COT-YYYY
+                self.correlativo = int(parts[-1])   # NNNNN
+        except (IndexError, ValueError):
+            pass  # Mantener serie y correlativo actuales si no se puede parsear
         
         # Cargar datos del cliente
         self.var_cliente.set(registro.get("cliente", ""))
@@ -2359,8 +2385,8 @@ class CotizadorApp(tk.Tk):
         
         # Fecha de entrega
         fecha_entrega = self.var_fecha_entrega.get().strip()
-        if fecha_entrega:
-            condiciones_texto.append(f"- Fecha de Entrega: {fecha_entrega}")
+        fecha_entrega_texto = fecha_entrega if fecha_entrega else "Por definir"
+        condiciones_texto.append(f"- Fecha de Entrega: {fecha_entrega_texto}")
         
         # Términos adicionales - cada línea con su guion
         terms = self.txt_terms.get("1.0", "end").strip()
@@ -2451,6 +2477,16 @@ class CotizadorApp(tk.Tk):
 
         numero, cot_dir, file_path, subtotal, igv, total = result
         self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Generada")
+        
+        # Después de generar el PDF, resetear serie y correlativo al siguiente número secuencial
+        # Solo si no es una versión
+        if not "-V" in numero:
+            self.correlativo += 1
+            self._save_config()
+            self._actualizar_numero_cot_display()
+        
+        # Limpiar numero_actual_display después de generar
+        self.numero_actual_display = None
 
         try:
             self._abrir_pdf(file_path)
@@ -2467,6 +2503,16 @@ class CotizadorApp(tk.Tk):
 
         numero, cot_dir, file_path, subtotal, igv, total = result
         self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Enviada")
+        
+        # Después de generar el PDF, resetear serie y correlativo al siguiente número secuencial
+        # Solo si no es una versión
+        if not "-V" in numero:
+            self.correlativo += 1
+            self._save_config()
+            self._actualizar_numero_cot_display()
+        
+        # Limpiar numero_actual_display después de generar
+        self.numero_actual_display = None
 
         try:
             self._abrir_pdf(file_path)
