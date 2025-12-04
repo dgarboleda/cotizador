@@ -277,7 +277,7 @@ class CotizadorApp(tk.Tk):
         self.placeholder_cliente = "Nombre del cliente"
         self.placeholder_dir_cliente = "Dirección del cliente"
         self.placeholder_email_cliente = "correo@cliente.com"
-        self.placeholder_cliente_ruc = "RUC (11 dígitos)"
+        self.placeholder_cliente_ruc = "N° RUC"
         self.placeholder_cant = "Cantidad"
         self.placeholder_precio = "Precio"
         self.placeholder_desc = "Descripción detallada del producto (multilínea)..."
@@ -598,17 +598,26 @@ class CotizadorApp(tk.Tk):
     def show_status(self, message, tipo="info", duracion=5000):
         """
         Muestra un mensaje en la barra de estado con efecto de parpadeo.
-        tipo: 'success' (verde), 'error' (rojo), 'warning' (naranja), 'info' (gris)
+        tipo: 'success' (verde), 'error' (rojo), 'warning' (naranja), 'info' (azul)
         duracion: tiempo en milisegundos antes de volver a 'Listo' (0 = permanente)
         """
         from datetime import datetime
         colores = {
-            "success": ("#d4edda", "#155724"),  # fondo, texto
-            "error": ("#f8d7da", "#721c24"),
-            "warning": ("#fff3cd", "#856404"),
-            "info": ("#f0f0f0", "#555555")
+            "success": ("#d4edda", "#155724"),    # Verde claro fondo, verde oscuro texto
+            "error": ("#f8d7da", "#721c24"),      # Rojo claro fondo, rojo oscuro texto
+            "warning": ("#fff3cd", "#856404"),    # Amarillo claro fondo, naranja texto
+            "info": ("#cce5ff", "#0052cc")        # Azul claro fondo, azul oscuro texto (MÁS LLAMATIVO)
         }
         bg, fg = colores.get(tipo, colores["info"])
+        
+        # Colores atenuados para el efecto de parpadeo (off)
+        colores_atenuados = {
+            "success": ("#e8f5e9", "#4caf50"),    # Verde muy claro, verde más suave
+            "error": ("#ffebee", "#ef5350"),      # Rojo muy claro, rojo más suave
+            "warning": ("#fffde7", "#fbc02d"),    # Amarillo muy claro, amarillo más suave
+            "info": ("#e3f2fd", "#90caf9")        # Azul muy claro, azul más suave
+        }
+        bg_atenuado, fg_atenuado = colores_atenuados.get(tipo, colores_atenuados["info"])
         
         # Guardar en el historial de notificaciones
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -627,6 +636,8 @@ class CotizadorApp(tk.Tk):
         self._blink_message = message
         self._blink_bg = bg
         self._blink_fg = fg
+        self._blink_bg_atenuado = bg_atenuado
+        self._blink_fg_atenuado = fg_atenuado
         self._blink_timer_duration = duracion
         
         # Iniciar el parpadeo
@@ -636,16 +647,15 @@ class CotizadorApp(tk.Tk):
         """Realiza el efecto de parpadeo en la barra de estado."""
         # Alternar entre visible e invisible
         if self._blink_count % 2 == 0:
-            # Mostrar el mensaje
+            # Mostrar el mensaje con colores originales
             self.status_bar.config(text=self._blink_message, 
                                   background=self._blink_bg, 
                                   foreground=self._blink_fg)
         else:
-            # Mostrar un estado atenuado
-            # Hacer el fondo más claro y el texto más gris
+            # Mostrar un estado atenuado pero aún visible
             self.status_bar.config(text=self._blink_message, 
-                                  background="#f0f0f0", 
-                                  foreground="#aaaaaa")
+                                  background=self._blink_bg_atenuado, 
+                                  foreground=self._blink_fg_atenuado)
         
         self._blink_count += 1
         
