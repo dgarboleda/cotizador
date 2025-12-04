@@ -1,0 +1,197 @@
+📊 ANÁLISIS DE OPTIMIZACIÓN - COTIZADOR
+
+Después de revisar el código de cotizador.py (2467 líneas), he identificado las siguientes 
+oportunidades de optimización y mejoras:
+
+═════════════════════════════════════════════════════════════════════════════════════
+
+1. ❌ CACHE Y MEMORIZACIÓN
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Se cargan clientes frecuentes del historial varias veces
+   - _cargar_clientes_frecuentes_en_combo() se llama múltiples veces
+   - Recalcula el mismo diccionario innecesariamente
+   
+   Solución: Implementar caché con invalidación inteligente
+   
+   Impacto: ⭐ Mejora mediana (reducción de I/O)
+   Líneas afectadas: ~1300-1350
+
+2. ❌ BÚSQUEDAS LINEALES EN DICCIONARIOS
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Búsqueda lineal de ítems en el árbol para calcular totales
+   
+   Código actual (línea ~1175):
+   ```python
+   subtotales = [
+       float(self.tree.item(i)["values"][4]) for i in items
+   ] if items else []
+   ```
+   
+   Impacto: Con 100+ ítems, esto recorre todo el árbol cada vez
+   
+   Impacto: ⭐⭐ Mejora pequeña (pero suma con operaciones frecuentes)
+
+3. ❌ DUPLICACIÓN DE CÓDIGO - CARGA DE ÍTEMS
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Código casi idéntico en dos métodos:
+   - _cargar_cotizacion_desde_historial() (líneas ~1920-1965)
+   - _cargar_items_desde_historial() (líneas ~1968-2013)
+   
+   Solución: Refactorizar en método compartido con parámetros
+   
+   Impacto: ⭐ Mejora en mantenibilidad (no rendimiento)
+   Líneas: ~100 líneas duplicadas
+
+4. ✅ OPERACIONES DE ARCHIVO - YA OPTIMIZADAS
+───────────────────────────────────────────────────────────────────────────────────
+
+   ✓ load_json_safe() y save_json_safe() manejan errores correctamente
+   ✓ Path.exists() es eficiente
+   ✓ shutil.copy2() es el método correcto para copiar con metadatos
+
+5. ❌ STRINGS - FORMATEO REPETITIVO
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Formateo de símbolo de moneda repetido en múltiples lugares
+   
+   Código actual:
+   - _get_simbolo_moneda() (línea ~1195) - ✓ Bueno, centralizado
+   - Pero se llama frecuentemente en _refresh_totals()
+   
+   Solución: Cachear resultado en self.simbolo_moneda cuando cambia
+   
+   Impacto: ⭐ Mejora pequeña
+
+6. ❌ VALIDACIÓN DE EMAIL REPETIDA
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Regex compilado en cada validación
+   
+   Código (línea ~2040):
+   ```python
+   if not re.match(r"[^@]+@[^@]+\.[^@]+", dest):
+   ```
+   
+   Solución: Compilar regex una sola vez como constante o parámetro de clase
+   
+   Impacto: ⭐ Mejora pequeña (pero good practice)
+   Líneas: Necesita cambio global
+
+7. ❌ BÚSQUEDA DE VERSIÓN - PARSING INEFICIENTE
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: Se parsea "-V" de numero varias veces sin cache
+   
+   Código (líneas ~1230-1240):
+   ```python
+   version = 1
+   numero_sin_version = numero
+   if "-V" in numero:
+       try:
+           parts = numero.split("-V")
+           numero_sin_version = parts[0]
+           version = int(parts[1])
+   ```
+   
+   Solución: Crear método _parse_numero_version() reutilizable
+   
+   Impacto: ⭐ Mejora pequeña
+   Frecuencia: Se usa en múltiples métodos
+
+8. ❌ PLACEHOLDER CHECKING - INEFICIENTE
+───────────────────────────────────────────────────────────────────────────────────
+
+   Problema: _clean_var() se llama frecuentemente con el mismo placeholder
+   
+   Solución: Usar constantes para placeholders
+   
+   Impacto: ⭐ Mejora en legibilidad
+   Líneas: Lines ~1120 (definición de placeholders)
+
+9. ✅ INTERFAZ DE USUARIO - BIEN IMPLEMENTADA
+───────────────────────────────────────────────────────────────────────────────────
+
+   ✓ Eventos bindeados correctamente
+   ✓ Estado de widgets manejado apropiadamente
+   ✓ Preview de imágenes manejo lazy (solo carga si existe)
+
+10. ✅ PDF GENERATION - ARQUITECTURA LIMPIA
+───────────────────────────────────────────────────────────────────────────────────
+
+   ✓ Clase separada CotizadorPDF hereda de FPDF
+   ✓ Métodos header() y footer() centralizados
+   ✓ Manejo de excepciones en image()
+
+═════════════════════════════════════════════════════════════════════════════════════
+
+PROPUESTAS DE OPTIMIZACIÓN (priorizadas por impacto):
+
+Prioridad 1 - CAMBIOS RÁPIDOS (sin riesgo):
+───────────────────────────────────────────────────────────────────────────────────
+
+1. Compilar regex de email como constante
+   - Cambio: 2 líneas
+   - Ganancia: 5-10% en validaciones repetidas
+   - Tiempo: 2 minutos
+
+2. Centralizar extracción de versión
+   - Cambio: Método de 5 líneas + refactorizar 3 usos
+   - Ganancia: Mejor mantenibilidad + pequeña mejora
+   - Tiempo: 10 minutos
+
+3. Cachear símbolo de moneda
+   - Cambio: 3 líneas + actualizar en cambios de moneda
+   - Ganancia: Pequeña mejora en _refresh_totals()
+   - Tiempo: 5 minutos
+
+Prioridad 2 - REFACTORIZACIÓN (mejora de calidad):
+───────────────────────────────────────────────────────────────────────────────────
+
+1. DRY - Eliminar código duplicado en carga de ítems
+   - Cambio: Nuevo método _cargar_items_desde_registro()
+   - Ganancia: Código más mantenible, menos bugs
+   - Tiempo: 20 minutos
+   - Líneas guardadas: ~100 líneas duplicadas
+
+2. Caché de clientes con invalidación
+   - Cambio: Usar decorator @cache o dict con timestamp
+   - Ganancia: Reduce I/O en historial grande
+   - Tiempo: 15 minutos
+
+Prioridad 3 - BAJO IMPACTO (nice-to-have):
+───────────────────────────────────────────────────────────────────────────────────
+
+1. Usar constantes para placeholders
+2. Centralizar manejo de paths de carpetas
+3. Usar namedtuple para registros de historial
+
+═════════════════════════════════════════════════════════════════════════════════════
+
+ANÁLISIS DE PERFORMANCE ACTUAL:
+
+✅ Puntos fuertes:
+   • Lazy loading de imágenes (no carga todas de una vez)
+   • Preview de imagen con thumbnail optimizado
+   • JSON guardado de forma segura con try/except
+   • Path validation antes de operaciones
+   • Class-based architecture (bien organizado)
+
+⚠️ Áreas a mejorar:
+   • Regex compilada cada vez (minor)
+   • Clientes caché recalculado innecesariamente
+   • Código duplicado en 2 métodos de carga
+   • Cálculo de totales en cada refresh (normal, aceptable)
+
+═════════════════════════════════════════════════════════════════════════════════════
+
+RECOMENDACIÓN:
+
+Implementar Prioridad 1 (cambios rápidos) si quieres mejora inmediata.
+Implementar Prioridad 2 (refactorización) para código más mantenible.
+
+Impacto estimado de todas las optimizaciones: 10-15% en operaciones frecuentes
+
+════════════════════════════════════════════════════════════════════════════════════

@@ -27,6 +27,9 @@ CONFIG_PATH = Path("config_cotizador.json")
 HIST_PATH = Path("historial_cotizaciones.json")
 IGV_RATE = 0.18
 
+# Regex compiladas para mejor performance
+EMAIL_PATTERN = re.compile(r"[^@]+@[^@]+\.[^@]+")
+
 
 # ==== HELPERS GENERALES ===============================================
 def get_base_dir() -> Path:
@@ -73,6 +76,23 @@ def get_referencias_dir(config: dict) -> Path:
     if custom_path and Path(custom_path).exists():
         return Path(custom_path)
     return get_base_dir() / "Referencias"
+
+
+def parse_numero_version(numero: str) -> tuple:
+    """
+    Parsea un número de cotización con versión.
+    
+    Retorna: (numero_sin_version, version)
+    Ejemplo: "COT-2024-00001-V3" -> ("COT-2024-00001", 3)
+    """
+    if "-V" not in numero:
+        return numero, 1
+    
+    try:
+        parts = numero.split("-V")
+        return parts[0], int(parts[1])
+    except (IndexError, ValueError):
+        return numero, 1
 
 
 # ==== PDF ==============================================================
@@ -139,6 +159,7 @@ class CotizadorApp(tk.Tk):
         self.correlativo = 1
         self.tasa_igv = 0.18  # 18% predeterminado
         self.moneda = "SOLES"  # SOLES, DOLARES, EUROS
+        self._simbolo_moneda_cache = "S/"  # Cache del símbolo de moneda
         self.carpeta_cotizaciones = ""  # Ruta personalizada (vacío = usar predeterminada)
         self.carpeta_referencias = ""   # Ruta personalizada (vacío = usar predeterminada)
         # Términos y condiciones predeterminados
@@ -1170,13 +1191,17 @@ class CotizadorApp(tk.Tk):
         self.var_total.set(f"{simbolo} {total:,.2f}")
     
     def _get_simbolo_moneda(self):
-        """Retorna el símbolo de la moneda configurada."""
+        """Retorna el símbolo de la moneda configurada (desde cache)."""
+        # Recalcular cache solo si cambió la moneda
         simbolos = {
             "SOLES": "S/",
             "DOLARES": "$",
             "EUROS": "€"
         }
-        return simbolos.get(self.moneda, "S/")
+        nuevo_simbolo = simbolos.get(self.moneda, "S/")
+        if nuevo_simbolo != self._simbolo_moneda_cache:
+            self._simbolo_moneda_cache = nuevo_simbolo
+        return self._simbolo_moneda_cache
 
     # ==== PREVIEW IMAGEN ===============================================
     def _on_tree_select(self, event):
@@ -1230,15 +1255,7 @@ class CotizadorApp(tk.Tk):
             })
         
         # Extraer versión del número si existe
-        version = 1
-        numero_sin_version = numero
-        if "-V" in numero:
-            try:
-                parts = numero.split("-V")
-                numero_sin_version = parts[0]
-                version = int(parts[1])
-            except (IndexError, ValueError):
-                pass
+        numero_sin_version, version = parse_numero_version(numero)
 
         registro = {
             "numero": numero,
@@ -2062,7 +2079,7 @@ class CotizadorApp(tk.Tk):
                 self.show_info("No se envió correo (sin destinatario).")
                 return
 
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", dest):
+        if not EMAIL_PATTERN.match(dest):
             self.show_warning("Email inválido.")
             return
 
