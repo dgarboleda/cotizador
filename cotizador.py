@@ -434,6 +434,7 @@ class CotizadorApp(tk.Tk):
         frame = ttk.LabelFrame(self, text="Ítems")
         frame.pack(fill="x", padx=10, pady=5)
 
+        # Usar altura fija (no cambiar)
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=40)
 
@@ -992,8 +993,9 @@ class CotizadorApp(tk.Tk):
             if messagebox.askyesno("Confirmar", "¿Deseas restaurar la aplicación de fábrica?"):
                 try:
                     base_dir = get_base_dir()
-                    # Eliminar archivos de configuración
-                    for file in ["config_cotizador.json", "historial_cotizaciones.json", "catalog.json"]:
+                    # Eliminar archivos de configuración y datos del usuario
+                    for file in ["config_cotizador.json", "historial_cotizaciones.json", "catalog.json", 
+                                 "plantillas_items.json", "borrador_cotizacion.json"]:
                         f = Path(file)
                         if f.exists():
                             f.unlink()
@@ -1215,18 +1217,21 @@ class CotizadorApp(tk.Tk):
             return
 
         subtotal = cant * precio
+        
+        # Reemplazar saltos de línea por " | " para visualización en tabla
+        desc_display = desc.replace('\n', ' | ')
 
         if self.item_editing:
             icon = "📷" if self.item_images.get(self.item_editing) else ""
             self.tree.item(
                 self.item_editing,
-                values=(icon, desc, f"{cant:.2f}", f"{precio:.2f}", f"{subtotal:.2f}")
+                values=(icon, desc_display, f"{cant:.2f}", f"{precio:.2f}", f"{subtotal:.2f}")
             )
         else:
             icon = "📷" if self.pending_image_path else ""
             iid = self.tree.insert(
                 "", "end",
-                values=(icon, desc, f"{cant:.2f}", f"{precio:.2f}", f"{subtotal:.2f}")
+                values=(icon, desc_display, f"{cant:.2f}", f"{precio:.2f}", f"{subtotal:.2f}")
             )
             if self.pending_image_path:
                 self.item_images[iid] = self.pending_image_path
@@ -1337,6 +1342,11 @@ class CotizadorApp(tk.Tk):
         
         # Activar autoguardado cada vez que cambian los totales
         self._programar_autoguardado()
+    
+    def _actualizar_altura_filas(self):
+        """Desactivado: Tkinter Treeview no soporta filas con diferente altura individual.
+        Se usa reemplazo de saltos de línea por ' | ' en su lugar."""
+        pass
     
     def _programar_autoguardado(self):
         """Programa autoguardado de borrador cada 30 segundos."""
@@ -1588,6 +1598,8 @@ class CotizadorApp(tk.Tk):
         items = []
         for item_id in self.tree.get_children():
             icon, desc, cant, precio, subtotal_item = self.tree.item(item_id)["values"]
+            # Reemplazar " | " de vuelta a saltos de línea para guardar correctamente en historial
+            desc = desc.replace(' | ', '\n')
             img_src = self.item_images.get(item_id, "")
             items.append({
                 "descripcion": desc,
@@ -2691,6 +2703,9 @@ class CotizadorApp(tk.Tk):
 
         for idx, item in enumerate(self.tree.get_children(), start=1):
             icon, d, c, p, s = self.tree.item(item)["values"]
+            
+            # Reemplazar " | " de vuelta a saltos de línea para el PDF
+            d = d.replace(' | ', '\n')
 
             img_src = self.item_images.get(item)
             ref_code = f"R{idx}" if img_src else ""
