@@ -588,9 +588,11 @@ class CotizadorApp(tk.Tk):
         )
         ttk.Button(frm, text="Generar PDF", command=self.generar_pdf).pack(side="right", padx=5)
         
-        # Barra de estado (clickeable)
-        self.status_bar = ttk.Label(self, text="Listo", relief="sunken", anchor="w", 
-                                    background="#f0f0f0", foreground="#555555")
+        # Barra de estado (clickeable) con texto en negrita
+        # Usar tk.Label en lugar de ttk.Label para poder aplicar fuente en negrita
+        self.status_bar = tk.Label(self, text="Listo", relief="sunken", anchor="w", 
+                                   background="#f0f0f0", foreground="#555555",
+                                   font=("Arial", 9, "bold"), padx=5, pady=3)
         self.status_bar.pack(side="bottom", fill="x", padx=2, pady=2)
         self.status_bar.bind("<Button-1>", lambda e: self.abrir_log_notificaciones())
 
