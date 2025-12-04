@@ -121,6 +121,27 @@ def parse_fecha_flexible(fecha_str: str):
     return None
 
 
+def validar_ruc_peruano(ruc: str) -> bool:
+    """
+    Valida un RUC peruano incluyendo el dígito verificador.
+    RUC tiene 11 dígitos y el último es un dígito verificador.
+    """
+    if not ruc or not ruc.isdigit() or len(ruc) != 11:
+        return False
+    
+    # Algoritmo de validación del RUC peruano
+    factores = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+    suma = sum(int(ruc[i]) * factores[i] for i in range(10))
+    resto = suma % 11
+    digito_verificador = 11 - resto if resto != 0 else 0
+    
+    # Si el resultado es 10 o 11, el dígito verificador es 0
+    if digito_verificador >= 10:
+        digito_verificador = 0
+    
+    return int(ruc[10]) == digito_verificador
+
+
 # ==== PDF ==============================================================
 
 class CotizadorPDF(FPDF):
@@ -208,11 +229,15 @@ class CotizadorApp(tk.Tk):
         
         # Control de versiones
         self.numero_base_version = None  # Guarda el número base al cargar desde historial
-        self.numero_actual_display = None  # Guarda el número actual para mostrar en etiqueta
 
         # imágenes por ítem
         self.item_images = {}           # {iid: ruta_origen}
         self.pending_image_path = None  # imagen seleccionada para nuevo ítem
+        
+        # Autoguardado y debounce
+        self._autosave_job = None
+        self._search_debounce_job = None
+        self._plantillas_items = []  # Plantillas de items frecuentes
 
         # preview imagen
         self.preview_photo = None
@@ -312,17 +337,9 @@ class CotizadorApp(tk.Tk):
         return val
 
     def _actualizar_numero_cot_display(self):
-        """Actualiza el display del número de cotización.
-        
-        Muestra el número actual, ya sea una cotización nueva o una versión.
-        """
-        # Si hay un numero guardado (para versiones), usarlo
-        if hasattr(self, 'numero_actual_display') and self.numero_actual_display:
-            self.var_numero_cot.set(self.numero_actual_display)
-        else:
-            # Si no, mostrar el número normal (serie-correlativo)
-            numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
-            self.var_numero_cot.set(numero)
+        """Actualiza el display del número de cotización."""
+        numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
+        self.var_numero_cot.set(numero)
     
     def _get_cotizaciones_dir(self) -> Path:
         """Obtiene la carpeta de cotizaciones (personalizada o predeterminada)."""
@@ -474,9 +491,10 @@ class CotizadorApp(tk.Tk):
 
         ttk.Button(frm, text="Editar", command=self.editar_item).grid(row=0, column=5, padx=5)
         ttk.Button(frm, text="Eliminar", command=self.eliminar_item).grid(row=0, column=6, padx=5)
+        ttk.Button(frm, text="📋 Plantilla", command=self.gestionar_plantillas).grid(row=0, column=7, padx=5)
 
         self.btn_cancel = ttk.Button(frm, text="Cancelar", command=self.cancelar_edicion)
-        self.btn_cancel.grid(row=0, column=7, padx=5)
+        self.btn_cancel.grid(row=0, column=8, padx=5)
         self.btn_cancel["state"] = "disabled"
 
     # ---- Términos y Totales lado a lado ------------------------------
@@ -922,7 +940,19 @@ class CotizadorApp(tk.Tk):
 
         def guardar_config():
             self.empresa["nombre"] = var_emp_nombre.get().strip()
-            self.empresa["ruc"] = var_emp_ruc.get().strip()
+            ruc_ingresado = var_emp_ruc.get().strip()
+            
+            # Validar RUC si se ingresó uno
+            if ruc_ingresado and not validar_ruc_peruano(ruc_ingresado):
+                respuesta = messagebox.askyesno(
+                    "RUC inválido",
+                    f"El RUC '{ruc_ingresado}' no parece ser válido.\n\n¿Desea guardarlo de todas formas?",
+                    icon='warning'
+                )
+                if not respuesta:
+                    return
+            
+            self.empresa["ruc"] = ruc_ingresado
             self.empresa["direccion"] = var_emp_dir.get().strip()
 
             logo_val = var_logo.get().strip()
@@ -1021,8 +1051,6 @@ class CotizadorApp(tk.Tk):
                 siguiente_version = 2  # Si no hay versiones, esta es la V2
             
             numero = f"{numero_base}-V{siguiente_version}"
-            # Guardar el número actual para mostrar en la etiqueta
-            self.numero_actual_display = numero
             # Limpiar el numero_base_version después de usarlo
             self.numero_base_version = None
         else:
@@ -1030,8 +1058,6 @@ class CotizadorApp(tk.Tk):
             numero = f"{self.serie}-{str(self.correlativo).zfill(5)}"
             self.correlativo += 1
             self._save_config()
-            # Limpiar el display para que muestre el siguiente número
-            self.numero_actual_display = None
         
         self._actualizar_numero_cot_display()
         return numero
@@ -1228,6 +1254,153 @@ class CotizadorApp(tk.Tk):
         self.var_subtotal.set(f"{simbolo} {subtotal:,.2f}")
         self.var_igv.set(f"{simbolo} {igv:,.2f}")
         self.var_total.set(f"{simbolo} {total:,.2f}")
+        
+        # Activar autoguardado cada vez que cambian los totales
+        self._programar_autoguardado()
+    
+    def _programar_autoguardado(self):
+        """Programa autoguardado de borrador cada 30 segundos."""
+        if self._autosave_job:
+            self.after_cancel(self._autosave_job)
+        self._autosave_job = self.after(30000, self._autoguardar_borrador)
+    
+    def _autoguardar_borrador(self):
+        """Guarda un borrador temporal de la cotización actual."""
+        try:
+            # Solo guardar si hay items o datos del cliente
+            if not self.tree.get_children() and not self.var_cliente.get().strip():
+                return
+            
+            borrador = {
+                "timestamp": datetime.now().isoformat(),
+                "cliente": self.var_cliente.get(),
+                "email": self.var_cliente_email.get(),
+                "direccion": self.var_direccion.get(),
+                "condicion_pago": self.var_condicion_pago.get(),
+                "validez": self.var_validez.get(),
+                "fecha_entrega": self.var_fecha_entrega.get(),
+                "moneda": self.moneda,
+                "tasa_igv": self.tasa_igv,
+                "igv_enabled": self.var_igv_enabled.get(),
+                "items": []
+            }
+            
+            # Guardar items
+            for item_id in self.tree.get_children():
+                vals = self.tree.item(item_id)["values"]
+                borrador["items"].append({
+                    "descripcion": vals[1],
+                    "cantidad": vals[2],
+                    "precio": vals[3],
+                    "subtotal": vals[4],
+                    "imagen": self.item_images.get(item_id, "")
+                })
+            
+            # Guardar en archivo temporal
+            borrador_path = get_base_dir() / "borrador_cotizacion.json"
+            save_json_safe(borrador_path, borrador)
+            
+        except Exception:
+            pass  # Silencioso, no interrumpir al usuario
+    
+    def gestionar_plantillas(self):
+        """Ventana para gestionar plantillas de items frecuentes."""
+        win = tk.Toplevel(self)
+        win.title("Plantillas de Items")
+        win.geometry("600x400")
+        win.transient(self)
+        win.grab_set()
+        
+        # Cargar plantillas
+        plantillas_path = get_base_dir() / "plantillas_items.json"
+        plantillas = load_json_safe(plantillas_path, [])
+        
+        # Frame superior con lista
+        frm_top = ttk.Frame(win)
+        frm_top.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        tree = ttk.Treeview(frm_top, columns=("desc", "cant", "precio"), show="headings", height=10)
+        tree.heading("desc", text="Descripción")
+        tree.heading("cant", text="Cantidad")
+        tree.heading("precio", text="Precio Unit.")
+        tree.column("desc", width=350)
+        tree.column("cant", width=100)
+        tree.column("precio", width=100)
+        tree.pack(side="left", fill="both", expand=True)
+        
+        scroll = ttk.Scrollbar(frm_top, orient="vertical", command=tree.yview)
+        scroll.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scroll.set)
+        
+        # Cargar plantillas en el tree
+        for p in plantillas:
+            tree.insert("", "end", values=(p.get("descripcion", ""), p.get("cantidad", ""), p.get("precio", "")))
+        
+        # Frame inferior con botones
+        frm_bot = ttk.Frame(win)
+        frm_bot.pack(fill="x", padx=10, pady=10)
+        
+        def usar_plantilla():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Sin selección", "Selecciona una plantilla primero.")
+                return
+            
+            idx = tree.index(sel[0])
+            plantilla = plantillas[idx]
+            
+            # Agregar el item a la cotización actual
+            self._reset_text_placeholder(self.txt_desc, self.placeholder_desc)
+            self.txt_desc.delete("1.0", "end")
+            self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
+            self.txt_desc.configure(foreground="black")
+            
+            self.var_cant.set(plantilla.get("cantidad", "1"))
+            self.ent_cant.configure(foreground="black")
+            
+            self.var_precio.set(plantilla.get("precio", "0.00"))
+            self.ent_precio.configure(foreground="black")
+            
+            win.destroy()
+            self.show_success("Plantilla cargada. Haz clic en 'Agregar' para confirmar.")
+        
+        def guardar_como_plantilla():
+            # Guardar el item actual como plantilla
+            desc_actual = self.txt_desc.get("1.0", "end").strip()
+            if not desc_actual or desc_actual == self.placeholder_desc:
+                messagebox.showwarning("Sin datos", "Primero completa la descripción del item.")
+                return
+            
+            cant_actual = self.var_cant.get().strip()
+            precio_actual = self.var_precio.get().strip()
+            
+            nueva_plantilla = {
+                "descripcion": desc_actual,
+                "cantidad": cant_actual if cant_actual != self.placeholder_cant else "1",
+                "precio": precio_actual if precio_actual != self.placeholder_precio else "0.00"
+            }
+            
+            plantillas.append(nueva_plantilla)
+            save_json_safe(plantillas_path, plantillas)
+            tree.insert("", "end", values=(nueva_plantilla["descripcion"], nueva_plantilla["cantidad"], nueva_plantilla["precio"]))
+            self.show_success("Plantilla guardada.")
+        
+        def eliminar_plantilla():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Sin selección", "Selecciona una plantilla para eliminar.")
+                return
+            
+            idx = tree.index(sel[0])
+            plantillas.pop(idx)
+            save_json_safe(plantillas_path, plantillas)
+            tree.delete(sel[0])
+            self.show_success("Plantilla eliminada.")
+        
+        ttk.Button(frm_bot, text="✅ Usar plantilla", command=usar_plantilla).pack(side="left", padx=5)
+        ttk.Button(frm_bot, text="💾 Guardar actual como plantilla", command=guardar_como_plantilla).pack(side="left", padx=5)
+        ttk.Button(frm_bot, text="❌ Eliminar", command=eliminar_plantilla).pack(side="left", padx=5)
+        ttk.Button(frm_bot, text="Cerrar", command=win.destroy).pack(side="right", padx=5)
     
     def _get_simbolo_moneda(self):
         """Retorna el símbolo de la moneda configurada (desde cache)."""
@@ -1898,10 +2071,16 @@ class CotizadorApp(tk.Tk):
                     )
                 )
 
+        def refrescar_tree_debounced(*args):
+            """Refrescar tree con debounce de 300ms para evitar refrescos innecesarios."""
+            if hasattr(self, '_search_debounce_job') and self._search_debounce_job:
+                self.after_cancel(self._search_debounce_job)
+            self._search_debounce_job = self.after(300, refrescar_tree)
+        
         cb_estado.bind("<<ComboboxSelected>>", refrescar_tree)
-        ent_buscar.bind("<KeyRelease>", refrescar_tree)
-        ent_fecha_desde.bind("<KeyRelease>", refrescar_tree)
-        ent_fecha_hasta.bind("<KeyRelease>", refrescar_tree)
+        ent_buscar.bind("<KeyRelease>", refrescar_tree_debounced)
+        ent_fecha_desde.bind("<KeyRelease>", refrescar_tree_debounced)
+        ent_fecha_hasta.bind("<KeyRelease>", refrescar_tree_debounced)
         var_filtrar_por_entrega.trace_add("write", lambda *args: refrescar_tree())
         refrescar_tree()
 
@@ -1933,60 +2112,22 @@ class CotizadorApp(tk.Tk):
 
         tree.bind("<Double-1>", on_double_click)
     
-    def _cargar_cotizacion_desde_historial(self, registro):
-        """Carga una cotización desde el historial para crear una nueva versión."""
+    def _cargar_items_en_tree(self, items: list, limpiar_tree: bool = True):
+        """
+        Método helper centralizado para cargar items en el tree.
+        Elimina código duplicado y facilita mantenimiento.
+        
+        Args:
+            items: Lista de diccionarios con datos de items
+            limpiar_tree: Si True, limpia el tree antes de cargar
+        """
         import shutil
         
-        # Limpiar cotización actual
-        self._reset_cotizacion()
+        if limpiar_tree:
+            for i in self.tree.get_children():
+                self.tree.delete(i)
+            self.item_images.clear()
         
-        # Establecer el número base para versionado
-        numero_completo = registro.get("numero", "")
-        if "-V" in numero_completo:
-            # Ya tiene versión, usar el numero_base guardado
-            self.numero_base_version = registro.get("numero_base", numero_completo.split("-V")[0])
-        else:
-            # Primera versión, usar el número completo como base
-            self.numero_base_version = numero_completo
-        
-        # Extraer serie y correlativo del número base para mostrar en etiqueta
-        numero_base = self.numero_base_version
-        try:
-            # Formato: COT-YYYY-NNNNN
-            parts = numero_base.split("-")
-            if len(parts) >= 3:
-                self.serie = "-".join(parts[:-1])  # COT-YYYY
-                self.correlativo = int(parts[-1])   # NNNNN
-        except (IndexError, ValueError):
-            pass  # Mantener serie y correlativo actuales si no se puede parsear
-        
-        # Cargar datos del cliente
-        self.var_cliente.set(registro.get("cliente", ""))
-        self.ent_cliente.configure(foreground="black")
-        self.var_cliente_email.set(registro.get("email", ""))
-        self.ent_email_cliente.configure(foreground="black")
-        self.var_direccion.set(registro.get("direccion_cliente", ""))
-        self.ent_dir_cliente.configure(foreground="black")
-        
-        # Cargar condiciones
-        self.var_condicion_pago.set(registro.get("condicion_pago", "50% adelanto - 50% contraentrega"))
-        self.var_validez.set(registro.get("validez", "15 días"))
-        self.var_fecha_entrega.set(registro.get("fecha_entrega", ""))
-        
-        # Cargar configuración de IGV y moneda
-        if "tasa_igv" in registro:
-            self.tasa_igv = registro["tasa_igv"]
-        if "moneda" in registro:
-            self.moneda = registro["moneda"]
-        if "igv_enabled" in registro:
-            self.var_igv_enabled.set(registro["igv_enabled"])
-        
-        # Actualizar checkbox IGV
-        porcentaje_igv = int(self.tasa_igv * 100)
-        self.chk_igv.config(text=f"Aplicar IGV {porcentaje_igv}%")
-        
-        # Cargar items
-        items = registro.get("items", [])
         ref_dir = self._get_referencias_dir()
         ref_dir.mkdir(exist_ok=True)
         
@@ -2021,52 +2162,56 @@ class CotizadorApp(tk.Tk):
         
         self._refresh_totals()
     
+    def _cargar_cotizacion_desde_historial(self, registro):
+        """Carga una cotización desde el historial para crear una nueva versión."""
+        # Limpiar cotización actual
+        self._reset_cotizacion()
+        
+        # Establecer el número base para versionado
+        numero_completo = registro.get("numero", "")
+        if "-V" in numero_completo:
+            # Ya tiene versión, usar el numero_base guardado
+            self.numero_base_version = registro.get("numero_base", numero_completo.split("-V")[0])
+        else:
+            # Primera versión, usar el número completo como base
+            self.numero_base_version = numero_completo
+        
+        # Cargar datos del cliente
+        self.var_cliente.set(registro.get("cliente", ""))
+        self.ent_cliente.configure(foreground="black")
+        self.var_cliente_email.set(registro.get("email", ""))
+        self.ent_email_cliente.configure(foreground="black")
+        self.var_direccion.set(registro.get("direccion_cliente", ""))
+        self.ent_dir_cliente.configure(foreground="black")
+        
+        # Cargar condiciones
+        self.var_condicion_pago.set(registro.get("condicion_pago", "50% adelanto - 50% contraentrega"))
+        self.var_validez.set(registro.get("validez", "15 días"))
+        self.var_fecha_entrega.set(registro.get("fecha_entrega", ""))
+        
+        # Cargar configuración de IGV y moneda
+        if "tasa_igv" in registro:
+            self.tasa_igv = registro["tasa_igv"]
+        if "moneda" in registro:
+            self.moneda = registro["moneda"]
+        if "igv_enabled" in registro:
+            self.var_igv_enabled.set(registro["igv_enabled"])
+        
+        # Actualizar checkbox IGV
+        porcentaje_igv = int(self.tasa_igv * 100)
+        self.chk_igv.config(text=f"Aplicar IGV {porcentaje_igv}%")
+        
+        # Cargar items usando método helper
+        items = registro.get("items", [])
+        self._cargar_items_en_tree(items, limpiar_tree=True)
+    
     def _cargar_items_desde_historial(self, registro):
         """Carga solo los items desde el historial para una nueva cotización."""
-        import shutil
-        
-        # Solo limpiar los items, no el resto de la cotización
-        for i in self.tree.get_children():
-            self.tree.delete(i)
-        self.item_images.clear()
-        
-        # Cargar items
         items = registro.get("items", [])
-        ref_dir = self._get_referencias_dir()
-        ref_dir.mkdir(exist_ok=True)
-        
-        for item_data in items:
-            desc = item_data.get("descripcion", "")
-            cant = item_data.get("cantidad", "")
-            precio = item_data.get("precio", "")
-            subtotal = item_data.get("subtotal", "")
-            img_path = item_data.get("imagen", "")
-            
-            # Insertar item en el tree
-            iid = self.tree.insert(
-                "", "end",
-                values=("", desc, cant, precio, subtotal)
-            )
-            
-            # Copiar imagen de referencia si existe
-            if img_path and Path(img_path).exists():
-                try:
-                    # Crear copia de la imagen en Referencias
-                    img_src = Path(img_path)
-                    img_ext = img_src.suffix
-                    new_img_name = f"ref_{iid}{img_ext}"
-                    new_img_path = ref_dir / new_img_name
-                    shutil.copy2(img_src, new_img_path)
-                    self.item_images[iid] = str(new_img_path)
-                    
-                    # Actualizar icono en el tree
-                    self.tree.item(iid, values=("📷", desc, cant, precio, subtotal))
-                except Exception as e:
-                    print(f"No se pudo copiar imagen: {e}")
-        
-        self._refresh_totals()
+        self._cargar_items_en_tree(items, limpiar_tree=True)
 
     def exportar_historial_excel(self):
+        """Exporta el historial a CSV con formato mejorado y más información."""
         data = load_json_safe(HIST_PATH, [])
         if not data:
             self.show_info("No hay cotizaciones para exportar.")
@@ -2074,25 +2219,67 @@ class CotizadorApp(tk.Tk):
 
         file_path = filedialog.asksaveasfilename(
             defaultextension=".csv",
-            filetypes=[("Archivos CSV (Excel)", "*.csv")]
+            filetypes=[("Archivos CSV (Excel)", "*.csv"), ("Todos los archivos", "*.*")]
         )
         if not file_path:
             return
 
         campos = [
-            "numero", "fecha", "cliente", "email",
-            "direccion_cliente", "subtotal", "igv", "total", "estado", "ruta_pdf"
+            "numero", "fecha", "fecha_entrega", "cliente", "email",
+            "direccion_cliente", "moneda", "subtotal", "igv", "total", 
+            "estado", "condicion_pago", "validez", "items_count", "ruta_pdf"
         ]
+        
         try:
             with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=campos)
                 writer.writeheader()
+                
+                # Calcular totales para resumen al final
+                total_general = 0
+                count_por_estado = {}
+                
                 for r in data:
-                    row = {k: r.get(k, "") for k in campos}
-                    if "estado" not in row or not row["estado"]:
-                        row["estado"] = "Generada"
+                    # Contar items
+                    items_count = len(r.get("items", []))
+                    
+                    # Preparar fila
+                    row = {
+                        "numero": r.get("numero", ""),
+                        "fecha": r.get("fecha", ""),
+                        "fecha_entrega": r.get("fecha_entrega", "Por definir"),
+                        "cliente": r.get("cliente", ""),
+                        "email": r.get("email", ""),
+                        "direccion_cliente": r.get("direccion_cliente", ""),
+                        "moneda": r.get("moneda", "SOLES"),
+                        "subtotal": r.get("subtotal", 0),
+                        "igv": r.get("igv", 0),
+                        "total": r.get("total", 0),
+                        "estado": r.get("estado", "Generada"),
+                        "condicion_pago": r.get("condicion_pago", ""),
+                        "validez": r.get("validez", ""),
+                        "items_count": items_count,
+                        "ruta_pdf": r.get("ruta_pdf", "")
+                    }
+                    
                     writer.writerow(row)
-            self.show_success(f"Historial exportado a: {file_path}")
+                    
+                    # Actualizar totales
+                    try:
+                        total_general += float(r.get("total", 0))
+                        estado = row["estado"]
+                        count_por_estado[estado] = count_por_estado.get(estado, 0) + 1
+                    except:
+                        pass
+                
+                # Agregar línea de resumen
+                writer.writerow({})
+                writer.writerow({"numero": "RESUMEN", "total": total_general})
+                writer.writerow({"numero": f"Total cotizaciones: {len(data)}"})
+                for estado, count in count_por_estado.items():
+                    writer.writerow({"numero": f"  {estado}: {count}"})
+                
+            self.show_success(f"Historial exportado con éxito:\n{file_path}")
         except Exception as e:
             self.show_error(f"No se pudo exportar: {e}")
 
@@ -2477,16 +2664,6 @@ class CotizadorApp(tk.Tk):
 
         numero, cot_dir, file_path, subtotal, igv, total = result
         self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Generada")
-        
-        # Después de generar el PDF, resetear serie y correlativo al siguiente número secuencial
-        # Solo si no es una versión
-        if not "-V" in numero:
-            self.correlativo += 1
-            self._save_config()
-            self._actualizar_numero_cot_display()
-        
-        # Limpiar numero_actual_display después de generar
-        self.numero_actual_display = None
 
         try:
             self._abrir_pdf(file_path)
@@ -2503,16 +2680,6 @@ class CotizadorApp(tk.Tk):
 
         numero, cot_dir, file_path, subtotal, igv, total = result
         self._guardar_en_historial(numero, str(file_path), subtotal, igv, total, "Enviada")
-        
-        # Después de generar el PDF, resetear serie y correlativo al siguiente número secuencial
-        # Solo si no es una versión
-        if not "-V" in numero:
-            self.correlativo += 1
-            self._save_config()
-            self._actualizar_numero_cot_display()
-        
-        # Limpiar numero_actual_display después de generar
-        self.numero_actual_display = None
 
         try:
             self._abrir_pdf(file_path)
