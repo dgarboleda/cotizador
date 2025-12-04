@@ -1418,19 +1418,32 @@ class CotizadorApp(tk.Tk):
             idx = tree.index(sel[0])
             plantilla = plantillas[idx]
             
-            # Cargar el item de la plantilla en los campos actuales
-            self.txt_desc.delete("1.0", "end")
-            self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
-            self.txt_desc.configure(foreground="black")
-            
-            self.var_cant.set(plantilla.get("cantidad", "1"))
-            self.ent_cant.configure(foreground="black")
-            
-            self.var_precio.set(plantilla.get("precio", "0.00"))
-            self.ent_precio.configure(foreground="black")
-            
+            # Cerrar ventana primero
             win.destroy()
-            self.show_success("Plantilla cargada. Haz clic en 'Agregar' para confirmar.")
+            
+            # Cargar el item de la plantilla en los campos actuales
+            # Usar after para asegurar que la ventana se cierre completamente primero
+            def aplicar():
+                # Limpiar y cargar descripción
+                self.txt_desc.delete("1.0", "end")
+                self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
+                self.txt_desc.configure(foreground="black")
+                
+                # Cargar cantidad
+                self.var_cant.set(plantilla.get("cantidad", "1"))
+                self.ent_cant.configure(foreground="black")
+                
+                # Cargar precio
+                self.var_precio.set(plantilla.get("precio", "0.00"))
+                self.ent_precio.configure(foreground="black")
+                
+                # Dar foco al campo de cantidad para confirmar que no se restauren placeholders
+                self.ent_cant.focus_set()
+                
+                self.show_success("Plantilla cargada. Haz clic en 'Agregar' para confirmar.")
+            
+            self.after(50, aplicar)
+        
         
         def guardar_como_plantilla():
             # Guardar el item actual como plantilla
