@@ -597,7 +597,7 @@ class CotizadorApp(tk.Tk):
     # ==== BARRA DE ESTADO ==============================================
     def show_status(self, message, tipo="info", duracion=5000):
         """
-        Muestra un mensaje en la barra de estado.
+        Muestra un mensaje en la barra de estado con efecto de parpadeo.
         tipo: 'success' (verde), 'error' (rojo), 'warning' (naranja), 'info' (gris)
         duracion: tiempo en milisegundos antes de volver a 'Listo' (0 = permanente)
         """
@@ -609,7 +609,6 @@ class CotizadorApp(tk.Tk):
             "info": ("#f0f0f0", "#555555")
         }
         bg, fg = colores.get(tipo, colores["info"])
-        self.status_bar.config(text=message, background=bg, foreground=fg)
         
         # Guardar en el historial de notificaciones
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -618,10 +617,53 @@ class CotizadorApp(tk.Tk):
         if len(self.notification_log) > 100:
             self.notification_log.pop(0)
         
-        if duracion > 0:
-            self.after(duracion, lambda: self.status_bar.config(
-                text="Listo", background="#f0f0f0", foreground="#555555"
-            ))
+        # Cancelar parpadeo anterior si existe
+        if hasattr(self, '_blink_job') and self._blink_job:
+            self.after_cancel(self._blink_job)
+        
+        # Mostrar el mensaje con efecto de parpadeo
+        self._blink_count = 0
+        self._blink_max = 4  # 4 parpadeos (on/off)
+        self._blink_message = message
+        self._blink_bg = bg
+        self._blink_fg = fg
+        self._blink_timer_duration = duracion
+        
+        # Iniciar el parpadeo
+        self._do_blink()
+    
+    def _do_blink(self):
+        """Realiza el efecto de parpadeo en la barra de estado."""
+        # Alternar entre visible e invisible
+        if self._blink_count % 2 == 0:
+            # Mostrar el mensaje
+            self.status_bar.config(text=self._blink_message, 
+                                  background=self._blink_bg, 
+                                  foreground=self._blink_fg)
+        else:
+            # Mostrar un estado atenuado
+            # Hacer el fondo más claro y el texto más gris
+            self.status_bar.config(text=self._blink_message, 
+                                  background="#f0f0f0", 
+                                  foreground="#aaaaaa")
+        
+        self._blink_count += 1
+        
+        # Si aún hay parpadeos pendientes
+        if self._blink_count < self._blink_max:
+            # Esperar 250ms entre parpadeos
+            self._blink_job = self.after(250, self._do_blink)
+        else:
+            # Cuando termina el parpadeo, mostrar el mensaje permanentemente por duracion
+            self.status_bar.config(text=self._blink_message, 
+                                  background=self._blink_bg, 
+                                  foreground=self._blink_fg)
+            
+            if self._blink_timer_duration > 0:
+                self._blink_job = self.after(self._blink_timer_duration, lambda: self.status_bar.config(
+                    text="Listo", background="#f0f0f0", foreground="#555555"
+                ))
+    
     
     def show_success(self, message, duracion=5000):
         """Mensaje de éxito en verde."""
