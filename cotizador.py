@@ -1560,6 +1560,7 @@ class CotizadorApp(tk.Tk):
         import urllib.request
         import urllib.error
         import json
+        import ssl
         
         try:
             # Mostrar mensaje de consulta
@@ -1568,30 +1569,48 @@ class CotizadorApp(tk.Tk):
             
             url = f"https://dniruc.apisperu.com/api/v1/ruc/{ruc}?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImRnYXJib2xlZGFAZ21haWwuY29tIn0.rXW9BEWvNp0sStv33XImkUudScHfq63_LxL-Yw8mvG8"
             
+            # Crear contexto SSL que no verifique certificados
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
             # Realizar petición con timeout
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'Mozilla/5.0')
             
-            with urllib.request.urlopen(req, timeout=5) as response:
+            with urllib.request.urlopen(req, timeout=5, context=ssl_context) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 
-                # Verificar si la respuesta es exitosa
-                if data.get('success'):
-                    # Extraer datos
-                    razon_social = data.get('razonSocial', '')
-                    direccion = data.get('direccion', '')
-                    
-                    # Rellenar campos si no están ya completados
-                    cliente_actual = self.var_cliente.get().strip()
-                    if not cliente_actual or cliente_actual == self.placeholder_cliente:
-                        self.var_cliente.set(razon_social)
-                        self.ent_cliente.configure(foreground="black")
-                    
-                    direccion_actual = self.var_direccion.get().strip()
-                    if not direccion_actual or direccion_actual == self.placeholder_dir_cliente:
-                        self.var_direccion.set(direccion)
-                        self.ent_dir_cliente.configure(foreground="black")
-                    
+                # Debug: Imprimir respuesta completa
+                print(f"DEBUG - Respuesta API: {json.dumps(data, indent=2, ensure_ascii=False)}")
+                
+                # Extraer datos (intentar múltiples variantes de nombres de campos)
+                razon_social = (data.get('razonSocial') or 
+                               data.get('nombre') or 
+                               data.get('nombreORazonSocial') or '')
+                
+                direccion = (data.get('direccion') or 
+                            data.get('direccionCompleta') or '')
+                
+                print(f"DEBUG - Razón Social extraída: '{razon_social}'")
+                print(f"DEBUG - Dirección extraída: '{direccion}'")
+                
+                # Rellenar campos siempre (sobrescribir si hay datos)
+                if razon_social:
+                    print(f"DEBUG - Asignando razón social al campo cliente")
+                    self.var_cliente.set(razon_social)
+                    self.ent_cliente.configure(foreground="black")
+                else:
+                    print(f"DEBUG - No se obtuvo razón social de la API")
+                
+                if direccion:
+                    print(f"DEBUG - Asignando dirección al campo")
+                    self.var_direccion.set(direccion)
+                    self.ent_dir_cliente.configure(foreground="black")
+                else:
+                    print(f"DEBUG - No se obtuvo dirección de la API")
+                
+                if razon_social or direccion:
                     self.show_success(f"✅ Datos obtenidos: {razon_social}")
                 else:
                     self.show_warning(f"⚠️ No se encontraron datos para el RUC {ruc}")
@@ -1604,6 +1623,9 @@ class CotizadorApp(tk.Tk):
         except urllib.error.URLError:
             self.show_warning("⚠️ Sin conexión a internet. No se pudo consultar el RUC.")
         except Exception as e:
+            print(f"DEBUG - Error completo: {e}")
+            import traceback
+            traceback.print_exc()
             self.show_warning(f"⚠️ Error al consultar RUC: {str(e)[:50]}")
 
     def _editar_cliente_frecuente(self):
