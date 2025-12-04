@@ -281,7 +281,7 @@ class CotizadorApp(tk.Tk):
         self.placeholder_cant = "Cantidad"
         self.placeholder_precio = "Precio"
         self.placeholder_desc = "Descripción detallada del producto (multilínea)..."
-        self.placeholder_terms = "Términos y condiciones adicionales..."
+        self.placeholder_terms = "A cada línea se añade un guion al inicio automáticamente."
 
         self._build_ui()
         self._init_placeholders()
@@ -1418,8 +1418,7 @@ class CotizadorApp(tk.Tk):
             idx = tree.index(sel[0])
             plantilla = plantillas[idx]
             
-            # Agregar el item a la cotización actual
-            self._reset_text_placeholder(self.txt_desc, self.placeholder_desc)
+            # Cargar el item de la plantilla en los campos actuales
             self.txt_desc.delete("1.0", "end")
             self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
             self.txt_desc.configure(foreground="black")
