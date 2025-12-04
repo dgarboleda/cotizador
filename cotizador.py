@@ -370,48 +370,51 @@ class CotizadorApp(tk.Tk):
         frm = ttk.LabelFrame(self, text="Cliente")
         frm.pack(fill="x", padx=10, pady=5)
         
-        # Configurar peso de columnas para que la última se expanda
-        frm.columnconfigure(5, weight=1)
+        # Configurar peso de columnas para que se expandan
+        frm.columnconfigure(1, weight=1)  # Columna del RUC/Dirección
+        frm.columnconfigure(3, weight=2)  # Columna Cliente/Email (más ancho)
 
         # Fila 0: RUC, Nombre del Cliente y Número de Cotización
-        ttk.Label(frm, text="RUC:").grid(row=0, column=0, sticky="w", padx=(5, 0))
+        ttk.Label(frm, text="RUC:").grid(row=0, column=0, sticky="w", padx=(5, 5))
         self.ent_cliente_ruc = ttk.Entry(frm, textvariable=self.var_cliente_ruc, width=13)
-        self.ent_cliente_ruc.grid(row=0, column=1, sticky="w", padx=(0, 15))
+        self.ent_cliente_ruc.grid(row=0, column=1, sticky="w", padx=(0, 20))
         # NOTA: El binding de FocusOut se agregará después de _init_placeholders para no ser sobrescrito
         
-        ttk.Label(frm, text="Cliente:").grid(row=0, column=2, sticky="w")
+        ttk.Label(frm, text="Cliente:").grid(row=0, column=2, sticky="w", padx=(5, 5))
         self.ent_cliente = ttk.Entry(frm, textvariable=self.var_cliente, width=50)
-        self.ent_cliente.grid(row=0, column=3, sticky="ew", padx=(0, 15))
+        self.ent_cliente.grid(row=0, column=3, sticky="ew", padx=(0, 10))
         self.ent_cliente.bind("<KeyRelease>", self._on_cliente_key)
         self.ent_cliente.bind("<Down>", self._on_cliente_down)
 
         # Número de cotización completamente al borde derecho
         self.var_numero_cot = tk.StringVar(value="")
         frm_numero = ttk.LabelFrame(frm, text="Cotización", relief="solid")
-        frm_numero.grid(row=0, column=4, rowspan=2, sticky="ne", padx=(10, 5), pady=(0, 5))
+        frm_numero.grid(row=0, column=4, rowspan=3, sticky="ne", padx=(10, 5), pady=(0, 5))
         self.lbl_numero_cot = ttk.Label(frm_numero, textvariable=self.var_numero_cot, 
                                        font=("Arial", 12, "bold"), foreground="blue")
         self.lbl_numero_cot.pack(padx=10, pady=5)
         self._actualizar_numero_cot_display()
 
         # Fila 1: Dirección y Email
-        ttk.Label(frm, text="Dirección:").grid(row=1, column=0, sticky="w", padx=(5, 0))
+        ttk.Label(frm, text="Dirección:").grid(row=1, column=0, sticky="w", padx=(5, 5))
         self.ent_dir_cliente = ttk.Entry(frm, textvariable=self.var_direccion, width=50)
-        self.ent_dir_cliente.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 15))
+        self.ent_dir_cliente.grid(row=1, column=1, sticky="ew", padx=(0, 20))
         
-        ttk.Label(frm, text="Email:").grid(row=1, column=2, sticky="e", padx=(15, 5))
+        ttk.Label(frm, text="Email:").grid(row=1, column=2, sticky="w", padx=(5, 5))
         self.ent_email_cliente = ttk.Entry(frm, textvariable=self.var_cliente_email, width=35)
-        self.ent_email_cliente.grid(row=1, column=3, sticky="ew", padx=(0, 15))
+        self.ent_email_cliente.grid(row=1, column=3, sticky="ew", padx=(0, 10))
 
         # Fila 2: Clientes frecuentes y botones
-        ttk.Label(frm, text="Clientes frecuentes:").grid(row=2, column=0, columnspan=2, sticky="w", padx=(5, 0))
+        ttk.Label(frm, text="Clientes frecuentes:").grid(row=2, column=0, sticky="w", padx=(5, 5))
         self.cmb_clientes = ttk.Combobox(frm, state="readonly", width=40)
-        self.cmb_clientes.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(0, 15))
+        self.cmb_clientes.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(0, 20))
         self.cmb_clientes.bind("<<ComboboxSelected>>", self._on_cliente_frecuente_selected)
         
         # Botones para gestionar clientes frecuentes
-        ttk.Button(frm, text="✏️ Editar", width=10, command=self._editar_cliente_frecuente).grid(row=2, column=3, padx=(0, 5), sticky="w")
-        ttk.Button(frm, text="❌ Limpiar", width=10, command=self._limpiar_cliente_frecuente).grid(row=2, column=3, padx=(90, 0), sticky="w")
+        frm_botones = ttk.Frame(frm)
+        frm_botones.grid(row=2, column=3, sticky="w", padx=(0, 10))
+        ttk.Button(frm_botones, text="✏️ Editar", width=10, command=self._editar_cliente_frecuente).pack(side="left", padx=(0, 5))
+        ttk.Button(frm_botones, text="❌ Limpiar", width=10, command=self._limpiar_cliente_frecuente).pack(side="left")
 
         self.lb_suggestions = tk.Listbox(frm, height=5)
         self.lb_suggestions.bind("<<ListboxSelect>>", self._on_suggestion_click)
