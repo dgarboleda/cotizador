@@ -285,6 +285,9 @@ class CotizadorApp(tk.Tk):
 
         self._build_ui()
         self._init_placeholders()
+        
+        # Agregar binding de validación RUC DESPUÉS de los placeholders para que no sea sobrescrito
+        self.ent_cliente_ruc.bind("<FocusOut>", self._validar_ruc_cliente, add="+")
 
     # ==== CONFIG FILE ==================================================
     def _load_config(self):
@@ -384,7 +387,7 @@ class CotizadorApp(tk.Tk):
         ttk.Label(frm, text="RUC:").grid(row=0, column=4, sticky="w", padx=(20, 0))
         self.ent_cliente_ruc = ttk.Entry(frm, textvariable=self.var_cliente_ruc, width=15)
         self.ent_cliente_ruc.grid(row=0, column=5, sticky="w")
-        self.ent_cliente_ruc.bind("<FocusOut>", self._validar_ruc_cliente)
+        # NOTA: El binding de FocusOut se agregará después de _init_placeholders para no ser sobrescrito
 
         # Número de cotización completamente al borde derecho
         self.var_numero_cot = tk.StringVar(value="")
@@ -1581,9 +1584,6 @@ class CotizadorApp(tk.Tk):
             with urllib.request.urlopen(req, timeout=5, context=ssl_context) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 
-                # Debug: Imprimir respuesta completa
-                print(f"DEBUG - Respuesta API: {json.dumps(data, indent=2, ensure_ascii=False)}")
-                
                 # Extraer datos (intentar múltiples variantes de nombres de campos)
                 razon_social = (data.get('razonSocial') or 
                                data.get('nombre') or 
@@ -1592,23 +1592,18 @@ class CotizadorApp(tk.Tk):
                 direccion = (data.get('direccion') or 
                             data.get('direccionCompleta') or '')
                 
-                print(f"DEBUG - Razón Social extraída: '{razon_social}'")
-                print(f"DEBUG - Dirección extraída: '{direccion}'")
-                
                 # Rellenar campos siempre (sobrescribir si hay datos)
                 if razon_social:
-                    print(f"DEBUG - Asignando razón social al campo cliente")
                     self.var_cliente.set(razon_social)
                     self.ent_cliente.configure(foreground="black")
-                else:
-                    print(f"DEBUG - No se obtuvo razón social de la API")
                 
                 if direccion:
-                    print(f"DEBUG - Asignando dirección al campo")
                     self.var_direccion.set(direccion)
                     self.ent_dir_cliente.configure(foreground="black")
-                else:
-                    print(f"DEBUG - No se obtuvo dirección de la API")
+                
+                # Forzar actualización de la UI
+                self.update_idletasks()
+                self.update()
                 
                 if razon_social or direccion:
                     self.show_success(f"✅ Datos obtenidos: {razon_social}")
@@ -1623,9 +1618,6 @@ class CotizadorApp(tk.Tk):
         except urllib.error.URLError:
             self.show_warning("⚠️ Sin conexión a internet. No se pudo consultar el RUC.")
         except Exception as e:
-            print(f"DEBUG - Error completo: {e}")
-            import traceback
-            traceback.print_exc()
             self.show_warning(f"⚠️ Error al consultar RUC: {str(e)[:50]}")
 
     def _editar_cliente_frecuente(self):
