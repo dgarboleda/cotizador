@@ -632,7 +632,7 @@ class CotizadorApp(tk.Tk):
         
         # Mostrar el mensaje con efecto de parpadeo
         self._blink_count = 0
-        self._blink_max = 4  # 4 parpadeos (on/off)
+        self._blink_max = 8  # 8 parpadeos (on/off) para más visibilidad
         self._blink_message = message
         self._blink_bg = bg
         self._blink_fg = fg
