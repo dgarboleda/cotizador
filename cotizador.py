@@ -238,6 +238,9 @@ class CotizadorApp(tk.Tk):
         self._autosave_job = None
         self._search_debounce_job = None
         self._plantillas_items = []  # Plantillas de items frecuentes
+        
+        # Bandera para evitar que placeholders interfieran con carga de datos
+        self._loading_data = False
 
         # preview imagen
         self.preview_photo = None
@@ -756,11 +759,15 @@ class CotizadorApp(tk.Tk):
         entry.configure(foreground="grey")
 
         def on_focus_in(event, e=entry, v=var, ph=placeholder):
+            if self._loading_data:  # No interferir si estamos cargando datos
+                return
             if v.get() == ph:
                 v.set("")
                 e.configure(foreground="black")
 
         def on_focus_out(event, e=entry, v=var, ph=placeholder):
+            if self._loading_data:  # No interferir si estamos cargando datos
+                return
             if not v.get().strip():
                 v.set(ph)
                 e.configure(foreground="grey")
@@ -773,11 +780,15 @@ class CotizadorApp(tk.Tk):
         widget.configure(foreground="grey")
 
         def on_focus_in(event, w=widget, ph=placeholder):
+            if self._loading_data:  # No interferir si estamos cargando datos
+                return
             if w.get("1.0", "end").strip() == ph and str(w.cget("foreground")) == "grey":
                 w.delete("1.0", "end")
                 w.configure(foreground="black")
 
         def on_focus_out(event, w=widget, ph=placeholder):
+            if self._loading_data:  # No interferir si estamos cargando datos
+                return
             if not w.get("1.0", "end").strip():
                 w.insert("1.0", ph)
                 w.configure(foreground="grey")
@@ -1376,26 +1387,98 @@ class CotizadorApp(tk.Tk):
         """Ventana para gestionar plantillas de items frecuentes."""
         win = tk.Toplevel(self)
         win.title("Plantillas de Items")
-        win.geometry("600x400")
+        win.geometry("900x500")
         win.transient(self)
         win.grab_set()
         
-        # Cargar plantillas
-        plantillas_path = get_base_dir() / "plantillas_items.json"
-        plantillas = load_json_safe(plantillas_path, [])
+        # Cargar items únicos del historial de cotizaciones
+        hist_data = load_json_safe(HIST_PATH, [])
+        items_unicos = {}
+        
+        # Recolectar todos los items de todas las cotizaciones
+        for cotizacion in hist_data:
+            items = cotizacion.get("items", [])
+            for item in items:
+                desc = item.get("descripcion", "").strip()
+                if not desc:
+                    continue
+                
+                # Usar la descripción como clave para evitar duplicados
+                # Si ya existe, mantener el que tenga más información o el más reciente
+                if desc not in items_unicos:
+                    items_unicos[desc] = {
+                        "descripcion": desc,
+                        "cantidad": item.get("cantidad", "1"),
+                        "precio": item.get("precio", "0.00")
+                    }
+        
+        # Convertir dict a lista y ordenar por descripción
+        plantillas = sorted(items_unicos.values(), key=lambda x: x["descripcion"].lower())
+        
+        # Configurar grid para la ventana
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        
+        # Mensaje informativo en la parte superior
+        frm_info = ttk.Frame(win)
+        frm_info.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
+        
+        if not plantillas:
+            lbl_info = ttk.Label(frm_info, text="⚠️ No hay items en el historial. Crea cotizaciones con items para que aparezcan aquí automáticamente.", 
+                                foreground="orange", wraplength=850)
+        else:
+            lbl_info = ttk.Label(frm_info, text=f"📋 {len(plantillas)} item(s) único(s) del historial. Selecciona uno y haz clic en 'Usar plantilla'. Los duplicados se omiten automáticamente.", 
+                                wraplength=850)
+        lbl_info.pack(anchor="w")
         
         # Frame superior con lista
         frm_top = ttk.Frame(win)
-        frm_top.pack(fill="both", expand=True, padx=10, pady=10)
+        frm_top.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         
-        tree = ttk.Treeview(frm_top, columns=("desc", "cant", "precio"), show="headings", height=10)
+        # Calcular altura de fila basándose en el texto más largo
+        def calcular_altura_fila(texto, ancho_columna=600):
+            """Calcula la altura necesaria para una fila basándose en el texto."""
+            if not texto:
+                return 30  # Altura mínima
+            
+            # Reemplazar saltos de línea por separador para cálculo
+            texto_display = texto.replace('\n', ' | ')
+            
+            # Calcular cuántas líneas necesita el texto según el ancho
+            # Aproximadamente 7 caracteres por píxel en fuente por defecto
+            chars_por_linea = ancho_columna // 7
+            lineas_necesarias = max(1, len(texto_display) // chars_por_linea + (1 if len(texto_display) % chars_por_linea else 0))
+            
+            # Altura: líneas * 16px + padding
+            return max(30, lineas_necesarias * 16 + 10)
+        
+        # Calcular altura necesaria para la descripción más larga
+        max_altura = 30
+        if plantillas:
+            alturas = []
+            for p in plantillas:
+                desc = p.get("descripcion", "")
+                altura = calcular_altura_fila(desc)
+                alturas.append(altura)
+            # Usar la altura de la descripción más larga
+            max_altura = max(alturas)
+        
+        # Limitar la altura máxima a un valor razonable
+        max_altura = min(max_altura, 100)  # Máximo 100 píxeles por fila
+        
+        # Crear estilo para el Treeview con altura dinámica
+        style_name = f"Plantillas.Treeview"
+        style = ttk.Style()
+        style.configure(style_name, rowheight=max_altura)
+        
+        tree = ttk.Treeview(frm_top, columns=("desc", "cant", "precio"), show="headings", height=8, style=style_name)
         tree.heading("desc", text="Descripción")
         tree.heading("cant", text="Cantidad")
         tree.heading("precio", text="Precio Unit.")
-        tree.column("desc", width=350)
+        tree.column("desc", width=600)
         tree.column("cant", width=100)
-        tree.column("precio", width=100)
-        tree.pack(side="left", fill="both", expand=True)
+        tree.column("precio", width=150)
+        tree.pack(side="left", fill="x", expand=False)
         
         scroll = ttk.Scrollbar(frm_top, orient="vertical", command=tree.yview)
         scroll.pack(side="right", fill="y")
@@ -1403,11 +1486,13 @@ class CotizadorApp(tk.Tk):
         
         # Cargar plantillas en el tree
         for p in plantillas:
-            tree.insert("", "end", values=(p.get("descripcion", ""), p.get("cantidad", ""), p.get("precio", "")))
+            # Reemplazar saltos de línea por " | " para mejor visualización en Treeview
+            desc = p.get("descripcion", "").replace('\n', ' | ')
+            tree.insert("", "end", values=(desc, p.get("cantidad", ""), p.get("precio", "")))
         
         # Frame inferior con botones
         frm_bot = ttk.Frame(win)
-        frm_bot.pack(fill="x", padx=10, pady=10)
+        frm_bot.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
         
         def usar_plantilla():
             sel = tree.selection()
@@ -1418,69 +1503,37 @@ class CotizadorApp(tk.Tk):
             idx = tree.index(sel[0])
             plantilla = plantillas[idx]
             
-            # Cerrar ventana primero
+            # Cerrar ventana
             win.destroy()
             
-            # Cargar el item de la plantilla en los campos actuales
-            # Usar after para asegurar que la ventana se cierre completamente primero
+            # Aplicar datos con la bandera activada para evitar interferencia de placeholders
             def aplicar():
-                # Limpiar y cargar descripción
-                self.txt_desc.delete("1.0", "end")
-                self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
-                self.txt_desc.configure(foreground="black")
+                self._loading_data = True  # Activar bandera
                 
-                # Cargar cantidad
-                self.var_cant.set(plantilla.get("cantidad", "1"))
-                self.ent_cant.configure(foreground="black")
-                
-                # Cargar precio
-                self.var_precio.set(plantilla.get("precio", "0.00"))
-                self.ent_precio.configure(foreground="black")
-                
-                # Dar foco al campo de cantidad para confirmar que no se restauren placeholders
-                self.ent_cant.focus_set()
-                
-                self.show_success("Plantilla cargada. Haz clic en 'Agregar' para confirmar.")
+                try:
+                    # Cargar descripción
+                    self.txt_desc.delete("1.0", "end")
+                    self.txt_desc.insert("1.0", plantilla.get("descripcion", ""))
+                    self.txt_desc.configure(foreground="black")
+                    
+                    # Cargar cantidad
+                    self.var_cant.set(plantilla.get("cantidad", "1"))
+                    self.ent_cant.configure(foreground="black")
+                    
+                    # Cargar precio
+                    self.var_precio.set(plantilla.get("precio", "0.00"))
+                    self.ent_precio.configure(foreground="black")
+                    
+                    self.show_success("Plantilla cargada. Haz clic en 'Agregar' para confirmar.")
+                finally:
+                    # Desactivar bandera después de un pequeño delay
+                    self.after(200, lambda: setattr(self, '_loading_data', False))
             
-            self.after(50, aplicar)
+            self.after(100, aplicar)
         
-        
-        def guardar_como_plantilla():
-            # Guardar el item actual como plantilla
-            desc_actual = self.txt_desc.get("1.0", "end").strip()
-            if not desc_actual or desc_actual == self.placeholder_desc:
-                messagebox.showwarning("Sin datos", "Primero completa la descripción del item.")
-                return
-            
-            cant_actual = self.var_cant.get().strip()
-            precio_actual = self.var_precio.get().strip()
-            
-            nueva_plantilla = {
-                "descripcion": desc_actual,
-                "cantidad": cant_actual if cant_actual != self.placeholder_cant else "1",
-                "precio": precio_actual if precio_actual != self.placeholder_precio else "0.00"
-            }
-            
-            plantillas.append(nueva_plantilla)
-            save_json_safe(plantillas_path, plantillas)
-            tree.insert("", "end", values=(nueva_plantilla["descripcion"], nueva_plantilla["cantidad"], nueva_plantilla["precio"]))
-            self.show_success("Plantilla guardada.")
-        
-        def eliminar_plantilla():
-            sel = tree.selection()
-            if not sel:
-                messagebox.showinfo("Sin selección", "Selecciona una plantilla para eliminar.")
-                return
-            
-            idx = tree.index(sel[0])
-            plantillas.pop(idx)
-            save_json_safe(plantillas_path, plantillas)
-            tree.delete(sel[0])
-            self.show_success("Plantilla eliminada.")
         
         ttk.Button(frm_bot, text="✅ Usar plantilla", command=usar_plantilla).pack(side="left", padx=5)
-        ttk.Button(frm_bot, text="💾 Guardar actual como plantilla", command=guardar_como_plantilla).pack(side="left", padx=5)
-        ttk.Button(frm_bot, text="❌ Eliminar", command=eliminar_plantilla).pack(side="left", padx=5)
+        ttk.Button(frm_bot, text="🔄 Actualizar", command=lambda: [win.destroy(), self.gestionar_plantillas()]).pack(side="left", padx=5)
         ttk.Button(frm_bot, text="Cerrar", command=win.destroy).pack(side="right", padx=5)
     
     def _get_simbolo_moneda(self):
