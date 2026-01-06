@@ -48,6 +48,23 @@ pip install -r requirements.txt
 python cotizador.py
 ```
 
+### Servidor Web (API ligera)
+Para exponer la lógica del cotizador en una API web sin dependencias adicionales:
+
+```bash
+python web_api.py  # Inicia servidor HTTP en http://localhost:8000
+```
+
+Variables de entorno útiles:
+- `COTIZADOR_CONFIG_PATH`: ruta al archivo `config_cotizador.json` a usar en la API.
+- `COTIZADOR_HIST_PATH`: ruta al archivo `historial_cotizaciones.json` para persistir cotizaciones creadas vía API.
+
+Endpoints principales:
+- `GET /api/health` — estado del servicio.
+- `GET /api/config` — configuración básica (moneda, IGV, serie).
+- `GET /api/cotizaciones` — listado de cotizaciones recientes (parámetro `limit` opcional).
+- `POST /api/cotizaciones` — crea una nueva cotización y la guarda en el historial.
+
 ## Compilación a Ejecutable
 
 ```bash
